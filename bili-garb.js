@@ -948,11 +948,44 @@ function mergeSuitItems(target, src) {
     return got;
 }
 
+/**
+ * 按名字去装扮商城搜同名装扮。
+ * 文档 docs/garb/lottery.md「装扮/收藏集搜索API」：参数是 key_word，不是 keyword。
+ * 收藏集兑换物在文档年代就是普通装扮 item_id，所以这条路对老收藏集有效。
+ */
+function searchSuitByName(name) {
+    if (!name) return Promise.resolve(null);
+    var url = 'https://api.bilibili.com/x/garb/v2/mall/home/search?key_word=' +
+        encodeURIComponent(name) + '&ps=20&pn=1';
+    return req({ url: url })
+        .then(function (r) {
+            var j;
+            try { j = JSON.parse(r.data); } catch (e) { return null; }
+            if (!j || j.code !== 0 || !j.data || !j.data.list) return null;
+
+            // 优先 part_id=6 的装扮，item_id 为 0 的是收藏集自己，跳过
+            var cands = j.data.list.filter(function (x) {
+                return x && Number(x.item_id) > 0;
+            });
+            cands.sort(function (a, b) {
+                var pa = Number(a.part_id) === 6 ? 0 : 1;
+                var pb = Number(b.part_id) === 6 ? 0 : 1;
+                if (pa !== pb) return pa - pb;
+                return Number(a.item_id) < Number(b.item_id) ? 1 : -1;
+            });
+            return cands.length ? cands : null;
+        })
+        .catch(function () { return null; });
+}
+
 /** 收藏集兑换物：主题套装等，redeem_item_id 是 & 串起来的素材 id */
 function doBridgeApplySet(url) {
     var actId = queryOf(url, 'act_id');
     var lotteryId = queryOf(url, 'lottery_id');
     var collectId = queryOf(url, 'collect_id');
+
+    // 给 commit() 用的外层变量
+    var hit = null, lotId = '', hitName = '';
 
     if (!actId) return bridgeReply({ code: -1, message: 'missing act_id' });
     if (!collectId) return bridgeReply({ code: -1, message: 'missing collect_id' });
@@ -980,11 +1013,12 @@ function doBridgeApplySet(url) {
                 return bridgeReply({ code: -1, message: 'collect_list 解析失败' });
             }
             var infos = (j && j.data && j.data.collect_infos) || [];
-            var hit = null;
+            lotId = String(o.lot);
             for (var i = 0; i < infos.length; i++) {
                 if (String(infos[i].collect_id) === String(collectId)) { hit = infos[i]; break; }
             }
             if (!hit) return bridgeReply({ code: -1, message: '没找到这个兑换物' });
+            hitName = hit.redeem_item_name || ('兑换物 #' + collectId);
 
             var raw = String(hit.redeem_item_id || '');
             var ids = raw ? raw.split('&').filter(function (x) { return /^\d+$/.test(x); }) : [];
@@ -1015,50 +1049,91 @@ function doBridgeApplySet(url) {
             });
 
             return chain.then(function () {
-                var keys = Object.keys(merged);
-                if (!keys.length) {
-                    return bridgeReply({
-                        code: -1,
-                        message: '这套是收藏集素材，' + ids.length +
-                            ' 个 id 在装扮库里都查不到装扮包，穿不上'
-                    });
+                if (Object.keys(merged).length) {
+                    return commit(merged, resolved, ids[0], 'material');
                 }
 
-                var detail = {
-                    item_id: Number(ids[0]),
-                    name: hit.redeem_item_name || ('兑换物 #' + collectId),
-                    suit_items: merged
-                };
-
-                writeState({
-                    kind: 'suit',
-                    set_id: String(collectId),
-                    item_id: detail.item_id,
-                    name: detail.name,
-                    detail: detail,
-                    act_id: Number(actId) || actId,
-                    lottery_id: Number(o.lot) || o.lot,
-                    at: Date.now()
-                });
-
-                bridgeReply({
-                    code: 0,
-                    data: {
-                        kind: 'suit',
-                        set_id: String(collectId),
-                        item_id: detail.item_id,
-                        name: detail.name,
-                        resolved: resolved,
-                        parts: keys,
-                        has_skin: !!(firstPart(merged.skin) && firstPart(merged.skin).properties
-                            && firstPart(merged.skin).properties.package_url)
+                // 素材 id 解析不出来 —— 回落：按兑换物名字去商城搜同名装扮。
+                // 文档年代 redeem_item_id 就是普通装扮 item_id，老收藏集走这条能中。
+                return searchSuitByName(hit.redeem_item_name).then(function (cands) {
+                    if (!cands) {
+                        return bridgeReply({
+                            code: -1,
+                            message: '这套是收藏集素材，' + ids.length +
+                                ' 个 id 在装扮库里都查不到，商城也搜不到同名装扮'
+                        });
                     }
+
+                    var found = {};
+                    var n = 0;
+                    var c = Promise.resolve();
+
+                    cands.slice(0, 5).forEach(function (cand) {
+                        c = c.then(function () {
+                            if (n > 0) return;
+                            return req({ url: 'https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' + cand.item_id })
+                                .then(function (r) {
+                                    var d;
+                                    try { d = JSON.parse(r.data); } catch (e) { return; }
+                                    if (!d || d.code !== 0 || !d.data || !d.data.suit_items) return;
+                                    if (mergeSuitItems(found, d.data.suit_items) > 0) {
+                                        n = Number(cand.item_id);
+                                    }
+                                })
+                                .catch(function () { });
+                        });
+                    });
+
+                    return c.then(function () {
+                        if (!n) {
+                            return bridgeReply({
+                                code: -1,
+                                message: '搜到同名装扮但拿不到装扮包（可能已下架）'
+                            });
+                        }
+                        return commit(found, 1, n, 'search');
+                    });
                 });
             });
         })
         .catch(function (e) {
             bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
         });
+
+    /** 收尾：写状态 + 回包 */
+    function commit(items, resolved, primaryId, source) {
+        var detail = {
+            item_id: Number(primaryId),
+            name: hitName,
+            suit_items: items
+        };
+
+        writeState({
+            kind: 'suit',
+            set_id: String(collectId),
+            item_id: detail.item_id,
+            name: detail.name,
+            detail: detail,
+            act_id: Number(actId) || actId,
+            lottery_id: Number(lotId) || lotId,
+            at: Date.now()
+        });
+
+        bridgeReply({
+            code: 0,
+            data: {
+                kind: 'suit',
+                set_id: String(collectId),
+                item_id: detail.item_id,
+                name: detail.name,
+                resolved: resolved,
+                source: source,
+                parts: Object.keys(items),
+                has_skin: !!(firstPart(items.skin) && firstPart(items.skin).properties
+                    && firstPart(items.skin).properties.package_url)
+            }
+        });
+    }
 }
 
 function doBridge() {

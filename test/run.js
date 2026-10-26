@@ -375,6 +375,69 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('解析后仍走完整流程', JSON.parse(r3.done.response.body).code === -1);
     }
 
+    console.log('\n[9c] mode=bridge — apply-set 按名字回落搜索');
+    {
+        const COLLECT = JSON.parse(fs.readFileSync(path.join(__dirname, 'collect-114746.json'), 'utf8'));
+        const themeSet = COLLECT.data.collect_infos.find(c => c.redeem_item_type === 5);
+
+        const SEARCH = {
+            code: 0,
+            data: {
+                total: 2, pn: 1, ps: 20,
+                list: [
+                    // 收藏集自己，item_id 为 0，必须被跳过
+                    { item_id: 0, part_id: 0, name: '水果篮子', properties: { type: 'dlc_act' } },
+                    { item_id: 36438, part_id: 6, name: '鹿乃桜帆', properties: { type: 'ip' } }
+                ]
+            }
+        };
+
+        const r = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=' + themeSet.collect_id,
+                method: 'GET', headers: {}
+            },
+            http: o => {
+                if (o.url.includes('collect_list')) return { body: JSON.stringify(COLLECT) };
+                if (o.url.includes('/home/search')) return { body: JSON.stringify(SEARCH) };
+                if (o.url.includes('item_id=36438')) return { body: JSON.stringify(DETAIL) };
+                return { body: JSON.stringify({ code: 0, data: { suit_items: null } }) };
+            }
+        });
+
+        const j = JSON.parse(r.done.response.body);
+        ok('素材 id 全废时按名字搜到并成功', j.code === 0, JSON.stringify(j).slice(0, 200));
+        ok('回包标了 source=search', j.data && j.data.source === 'search');
+        ok('用的是搜到的 item_id', j.data && j.data.item_id === 36438);
+        ok('合并出了 skin', j.data && j.data.has_skin === true);
+
+        const searchReq = r.requests.find(x => x.url.includes('/home/search'));
+        ok('搜索参数是 key_word（文档里的名字）', !!searchReq && /key_word=/.test(searchReq.url));
+        ok('搜索时没把 keyword 当参数', !!searchReq && !/[?&]keyword=/.test(searchReq.url));
+
+        const st = JSON.parse(r.store[KEY]);
+        ok('落盘 item_id 是搜到的那个', st.item_id === 36438);
+        ok('落盘仍带 set_id', String(st.set_id) === String(themeSet.collect_id));
+
+        // 搜到但拿不到装扮包
+        const r2 = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=' + themeSet.collect_id,
+                method: 'GET', headers: {}
+            },
+            http: o => {
+                if (o.url.includes('collect_list')) return { body: JSON.stringify(COLLECT) };
+                if (o.url.includes('/home/search')) return { body: JSON.stringify(SEARCH) };
+                return { body: JSON.stringify({ code: 0, data: { suit_items: null } }) };
+            }
+        });
+        const j2 = JSON.parse(r2.done.response.body);
+        ok('搜到同名但没包 → -1 且说明原因', j2.code === -1 && /下架|拿不到装扮包/.test(j2.message), j2.message);
+        ok('失败不落盘', !(KEY in r2.store));
+    }
+
     // ─────────────────────────────────────────────────────────
     console.log('\n[10] mode=spoof-skin — 改写主题 + 加载动画');
     {

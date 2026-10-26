@@ -32,9 +32,11 @@ Surge → 首页 → 模块 → 右上角 `+` → 从 URL 导入，填：
 https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 ```
 
-模块里的 `script-path` 已经指向同一个 CDN 上的脚本，不需要手动放任何文件。
+模块里的 `script-path` 指向同一个 CDN 上的脚本，不需要手动放任何文件。
 
-> 为什么用 `gcore` 而不是 `cdn`：`cdn.jsdelivr.net` 的 `@main` 别名缓存刷新很慢，实测推完新版本半小时还是旧文件，而 purge 接口会限流（`"throttled": true`）。`gcore` / `testingcf` 这两个边缘实测是即时的。三个域名指向同一份文件，哪个先更新用哪个。
+**`script-path` 用的是 commit SHA，不是 `@main`。** jsDelivr 的 `@main` 别名缓存很难清 —— 推完新版本半小时还是旧文件，purge 接口还会限流（`"throttled": true`）。换成固定 SHA 后每次都是新 URL，任何边缘都立刻可读。代价是每次发版要顺手把模块里那七个 SHA 一起换掉。
+
+所以：**想拿最新脚本，用带 SHA 的模块地址**；`@main` 那条要等缓存自然过期（最长 12 小时）。
 
 想改成跟仓库同步开发，也可以把 `bili-garb.js` 和 `BiliGarb.sgmodule` 放进 Surge 配置目录，再把每条 `script-path` 换成本地相对路径 `bili-garb.js`。
 

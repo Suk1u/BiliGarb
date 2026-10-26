@@ -650,11 +650,20 @@ function overlayMain() {
      * 而登录态只在页面里，所以解析必须在这边做，做完再 POST 给桥接落盘。
      */
     var INTERNAL_BASE = 'https://api.bilibili.com/x/garb/internal/v2/mall/suit/detail?item_id=';
+    // 对照用的已知装扮 id（鹿乃桜帆），用来区分接口层拒绝和这套拒绝
+    var CONTROL_ID = '36438';
+
+    // 参数组合由松到紧。part=/from= 传空串可能被判非法（-403），所以先试完全不传。
+    var VARIANTS = [
+        { tag: 'bare', q: '' },
+        { tag: 'part9', q: '&part=9' },
+        { tag: 'part6', q: '&part=6' },
+        { tag: 'app', q: '&mobi_app=iphone&platform=ios&build=91601100&web_location=333.40212' }
+    ];
 
     /** 打一次 internal 接口，返回 {code, message, data} */
-    function tryInternal(id, extra) {
-        return _fetch(INTERNAL_BASE + encodeURIComponent(id) + '&part=&from=&from_id=' + (extra || ''),
-            { credentials: 'include' })
+    function tryInternal(id, q) {
+        return _fetch(INTERNAL_BASE + encodeURIComponent(id) + q, { credentials: 'include' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 return { code: (j && j.code), message: (j && j.message) || '', data: (j && j.data) || null };
@@ -668,11 +677,39 @@ function overlayMain() {
         var merged = {};
         var hitId = 0;
         var ids = (ctx && ctx.ids) || [];
-        var i = 0;
         var diag = [];
+        var winQ = null;      // 命中的参数组合
+        var i = 0;
 
-        // 第二轮补上 App 那套参数，万一服务端要
-        var EXTRA = '&mobi_app=iphone&platform=ios&build=91601100&web_location=333.40212';
+        function absorb(r, id, tag) {
+            var d = r.code === 0 && r.data;
+            diag.push({
+                id: String(id),
+                via: tag,
+                code: r.code,
+                message: r.message,
+                keys: d ? Object.keys(d).slice(0, 14) : []
+            });
+            if (d && d.suit_items) {
+                if (mergeLocal(merged, d.suit_items) > 0 && !hitId) hitId = Number(id);
+                return true;
+            }
+            return false;
+        }
+
+        /** 第一个 id 用各组合探一遍，选出能通的那组 */
+        function probe(id) {
+            var k = 0;
+            function next() {
+                if (k >= VARIANTS.length) return Promise.resolve(null);
+                var v = VARIANTS[k++];
+                return tryInternal(id, v.q).then(function (r) {
+                    if (absorb(r, id, v.tag)) return v.q;
+                    return next();
+                });
+            }
+            return next();
+        }
 
         function step() {
             if (i >= ids.length) {
@@ -690,30 +727,23 @@ function overlayMain() {
             }
             var id = ids[i++];
 
-            function absorb(r, tag) {
-                var d = r.code === 0 && r.data;
-                diag.push({
-                    id: String(id),
-                    via: tag,
-                    code: r.code,
-                    message: r.message,
-                    keys: d ? Object.keys(d).slice(0, 14) : []
+            if (winQ === null) {
+                // 先用一个已知能用的装扮 id 做对照：区分「接口层拒绝」和「这套拒绝」
+                return tryInternal(CONTROL_ID, '').then(function (cr) {
+                    absorb(cr, CONTROL_ID, 'control');
+                    return probe(id).then(function (q) {
+                        winQ = (q === null) ? '' : q;
+                        return step();
+                    });
                 });
-                if (d && d.suit_items) {
-                    if (mergeLocal(merged, d.suit_items) > 0 && !hitId) hitId = Number(id);
-                    return true;
-                }
-                return false;
             }
 
-            return tryInternal(id, '').then(function (r1) {
-                if (absorb(r1, 'plain')) return step();
-                return tryInternal(id, EXTRA).then(function (r2) {
-                    absorb(r2, 'app');
-                    return step();
-                });
+            return tryInternal(id, winQ).then(function (r) {
+                absorb(r, id, 'win');
+                return step();
             });
         }
+
         return step();
     }
 
@@ -732,10 +762,16 @@ function overlayMain() {
                     toast('换登录态接口重试…');
                     return resolveInternal(j.data).then(function (res) {
                         if (!res.payload) {
-                            var codes = res.diag.map(function (d) {
-                                return d.code + (d.message ? ' ' + d.message : '');
-                            }).join(' | ');
-                            toast('拿不到装扮包：' + (codes || '无响应').slice(0, 90));
+                            var ctrl = null, first = null;
+                            for (var k = 0; k < res.diag.length; k++) {
+                                var d = res.diag[k];
+                                if (d.via === 'control') ctrl = d;
+                                else if (!first) first = d;
+                            }
+                            var msg = '拿不到装扮包';
+                            if (ctrl) msg += '｜对照 ' + ctrl.id + '→' + ctrl.code + (ctrl.message ? ' ' + ctrl.message : '');
+                            if (first) msg += '｜素材→' + first.code + (first.message ? ' ' + first.message : '');
+                            toast(msg.slice(0, 110));
                             // 把每个 id 的返回码留给 /dump 看
                             return _fetch(SG + '/diag', {
                                 method: 'POST',

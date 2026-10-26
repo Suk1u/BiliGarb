@@ -1364,7 +1364,7 @@ function doSpoofSpaceBg() {
 // ─────────────────────────────────────────────────────────────
 
 var CAP_KEY = 'bili.garb.capture';
-var CAP_MAX = 12;
+var CAP_MAX = 20;
 var CAP_BODY_MAX = 4000;
 
 function capRead() {
@@ -1374,8 +1374,16 @@ function capRead() {
     } catch (e) { return []; }
 }
 
+function capPath(u) {
+    return String(u || '').replace(/^https?:\/\/[^/]+/, '').split('?')[0];
+}
+
+/** 同一个 方法+路径 只留最新一条，避免刷屏 */
 function capPush(entry) {
-    var arr = capRead();
+    var p = capPath(entry.url);
+    var arr = capRead().filter(function (e) {
+        return !(e.m === entry.m && capPath(e.url) === p);
+    });
     arr.push(entry);
     while (arr.length > CAP_MAX) arr.shift();
     try { $persistentStore.write(JSON.stringify(arr), CAP_KEY); } catch (e) {}
@@ -1396,9 +1404,9 @@ function doCapture() {
     if (!url || url.indexOf('/_sg/') > -1) return finish({});
 
     var method = String((typeof $request !== 'undefined' && $request.method) || 'GET').toUpperCase();
-    // 只关心写操作 —— 穿戴/绑定/领取都走 POST
-    if (method !== 'POST' && method !== 'PUT') return finish({});
 
+    // 读和写都要 —— 「使用」之后 App 很可能紧跟着发一个 GET 去取新的装备状态，
+    // 那个 GET 才是解析素材 id 的关键，只记 POST 会漏掉。
     capPush({
         t: new Date().toISOString(),
         m: method,

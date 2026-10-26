@@ -12,7 +12,7 @@
 |---|---|
 | `BiliGarb.sgmodule` | 模块清单，七条脚本 + MITM |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，127 条断言 |
+| `test/run.js` | 本地测试台，129 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -149,9 +149,9 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 
 ## 抓包（排查用）
 
-模块里带了一个旁观式抓包脚本，专门用来抓「使用 / 佩戴」这类写操作，好把没解析出来的装扮补进映射。
+模块里带了一个旁观式抓包脚本，专门用来抓「使用 / 佩戴」前后的接口调用，好把没解析出来的装扮补进映射。
 
-**只记 POST**，只记装扮 / 收藏集 / 空间相关的域名路径，`csrf` 会自动抹成 `<redacted>`，最多留 12 条，**不改动任何请求**。
+**读写都记**，只记装扮 / 收藏集 / 空间相关的域名路径，同一个接口只留最新一条（最多 20 条），`csrf` 会自动抹成 `<redacted>`，**不改动任何请求**。
 
 1. 确认模块已装、MITM 已开
 2. 在 B站里进收藏集，点你想抓的那个「使用」/「佩戴」
@@ -222,7 +222,7 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 127 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 129 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行
@@ -233,7 +233,7 @@ node test/run.js
 - 伪装层的字段替换、无状态放行、坏 JSON 不炸、只改自己的名片
 - 空间背景的顶层命中、嵌套命中、四种该放行的场景
 - 两套状态互斥：卡片态不触发装扮伪装，装扮态不触发空间背景
-- 抓包层：只记 POST、不记自己的桥、`csrf` 抹掉、环形缓冲最多 12 条、dump / clear
+- 抓包层：读写都记、按接口去重、不记自己的桥、`csrf` 抹掉、环形缓冲最多 20 条、dump / clear
 - `$done` 每次只调一次（Surge 里调两次会断流）
 
 夹具全是线上实抓，见上面的文件表。

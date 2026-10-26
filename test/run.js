@@ -709,7 +709,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             argument: 'capture',
             request: { url: 'https://api.bilibili.com/x/garb/user/asset', method: 'GET', headers: {} }
         });
-        ok('GET 不记', !(CAPKEY in r2.store));
+        ok('GET 也记（关键请求可能就是 GET）', (r2.store[CAPKEY] || '').indexOf('user/asset') > -1);
         ok('GET 也放行', r2.done && r2.done.body === undefined);
 
         const r3 = await run({
@@ -718,9 +718,26 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         });
         ok('自己的桥不抓', !(CAPKEY in r3.store));
 
-        // 环形缓冲：超过 12 条丢掉最老的
+        // 同一条路径重复打，只留最新一条
+        let dedup = {};
+        for (let i = 0; i < 3; i++) {
+            const rr = await run({
+                argument: 'capture',
+                request: {
+                    url: 'https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' + i,
+                    method: 'GET', body: ''
+                },
+                store: dedup
+            });
+            dedup = rr.store;
+        }
+        const dbuf = JSON.parse(dedup[CAPKEY]);
+        ok('同一路径只留一条', dbuf.filter(e => e.url.indexOf('suit/detail') > -1).length === 1, 'len=' + dbuf.length);
+        ok('留的是最新那条', /item_id=2/.test(dbuf[dbuf.length - 1].url));
+
+        // 环形缓冲：超过 20 条丢掉最老的
         let store = {};
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 25; i++) {
             const rr = await run({
                 argument: 'capture',
                 request: { url: 'https://api.bilibili.com/x/garb/test/' + i, method: 'POST', body: 'n=' + i },
@@ -729,8 +746,8 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             store = rr.store;
         }
         const buf = JSON.parse(store[CAPKEY]);
-        ok('最多留 12 条', buf.length === 12, 'len=' + buf.length);
-        ok('留的是最新的', /test\/14/.test(buf[buf.length - 1].url));
+        ok('最多留 20 条', buf.length === 20, 'len=' + buf.length);
+        ok('留的是最新的', /test\/24/.test(buf[buf.length - 1].url));
 
         // dump / clear
         const rd = await run({
@@ -739,7 +756,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             store
         });
         const jd = JSON.parse(rd.done.response.body);
-        ok('dump 返回条数', jd.count === 12 && jd.data.length === 12);
+        ok('dump 返回条数', jd.count === 20 && jd.data.length === 20);
 
         const rc = await run({
             argument: 'mode=bridge',

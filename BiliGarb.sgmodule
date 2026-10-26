@@ -1,5 +1,5 @@
 #!name=B站装扮注入器
-#!desc=在 B站「装扮」页面注入一个悬浮按钮，点开自动列出本页装扮，选中即可本地应用。打开 B站 → 我的 → 装扮，右下角粉色按钮。
+#!desc=在 B站「装扮」和「收藏集」页面注入一个悬浮按钮，点开自动列出本页装扮与卡片，选中即可本地应用。打开 B站 → 我的 → 装扮，右下角粉色按钮。
 #!system=ios
 #!author=RNA
 
@@ -25,6 +25,13 @@ BiliGarb-Card = type=http-response,pattern=^https?://api\.bilibili\.com/x/web-in
 
 # 空间页：按名覆盖 pendant / nickname_color，认不出的键原样放过。
 BiliGarb-Space = type=http-response,pattern=^https?://(api|app)\.bilibili\.com/x/(space|v2/space),requires-body=true,max-size=524288,script-path=https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-space
+
+# ── 收藏集 ────────────────────────────────────────────────
+# 收藏集卡片的空间背景。这个接口需要登录，响应结构没法在外部验证，
+# 所以用结构签名匹配：只改带 animation.animation_url / animation_backup_image
+# 的那个对象，认不出就整包放行。注入层已经覆盖 digital-card 系列页面
+# （www.bilibili.com/h5/mall/digital-card/*），同一个按钮在那里也能用。
+BiliGarb-SpaceBg = type=http-response,pattern=^https?://api\.bilibili\.com/x/garb/Right/SpaceBackgroundInfo,requires-body=true,max-size=524288,script-path=https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-spacebg
 
 [MITM]
 hostname = %APPEND% www.bilibili.com, api.bilibili.com, app.bilibili.com

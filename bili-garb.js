@@ -1,15 +1,20 @@
 /**
- * BiliGarb — B站装扮注入器 / Surge 模块脚本
+ * BiliGarb — B站装扮 / 收藏集注入器 · Surge 模块脚本
  *
- * 单一文件，五种模式，靠 argument=mode=xxx 分发：
- *   inject       http-response  在装扮 H5 外壳 HTML 里注入悬浮按钮与选择器
- *   bridge       http-request   截获页面发来的魔法 URL，落盘所选装扮
- *   spoof-skin   http-response  改写 resource/show/skin → 主题色 + 加载动画
- *   spoof-card   http-response  改写 web-interface/card → 挂件 + 名字颜色
- *   spoof-space  http-response  改写 space 系列 → 按名覆盖
+ * 单一文件，六种模式，靠 argument=mode=xxx 分发：
+ *   inject        http-response  在装扮 H5 外壳 HTML 里注入悬浮按钮与选择器
+ *   bridge        http-request   截获页面发来的魔法 URL，落盘所选装扮或卡片
+ *   spoof-skin    http-response  改写 resource/show/skin → 主题色 + 加载动画
+ *   spoof-card    http-response  改写 web-interface/card → 挂件 + 名字颜色
+ *   spoof-space   http-response  改写 space 系列 → 按名覆盖
+ *   spoof-spacebg http-response  改写 Right/SpaceBackgroundInfo → 收藏集空间背景
  *
  * 无外部依赖。不需要 WBI / appkey / access_key —— 我们只改写 App 自己
  * 发出的请求的响应，签名由 App 自己算。
+ *
+ * 两套数据体系：
+ *   装扮   suit  —— item_id 标识，suit_items.{card,card_bg,skin,loading,...}
+ *   收藏集 card  —— card_type_id 标识，card_type_info.{content,space_background,splash}
  */
 
 // ─────────────────────────────────────────────────────────────
@@ -50,11 +55,7 @@ function finish(v) {
 
 function req(opts) {
     return new Promise(function (resolve, reject) {
-        var o = {
-            'auto-cookie': false,
-            timeout: 12,
-            headers: HEADERS
-        };
+        var o = { 'auto-cookie': false, timeout: 12, headers: HEADERS };
         for (var k in opts) if (Object.prototype.hasOwnProperty.call(opts, k)) o[k] = opts[k];
         $httpClient.get(o, function (err, resp, data) {
             if (err) reject(new Error(String(err)));
@@ -68,8 +69,16 @@ function readState() {
         var s = $persistentStore.read(STORE_KEY);
         if (!s) return null;
         var o = JSON.parse(s);
-        return (o && o.detail) ? o : null;
+        if (!o) return null;
+        if (o.kind === 'card') return o.card ? o : null;
+        return o.detail ? o : null;
     } catch (e) { return null; }
+}
+
+/** 只要装扮态；收藏集态返回 null */
+function readSuitState() {
+    var s = readState();
+    return (s && s.kind !== 'card' && s.detail) ? s : null;
 }
 
 function writeState(o) {
@@ -90,9 +99,7 @@ function hdr(name) {
     if (typeof $request === 'undefined' || !$request.headers) return '';
     var h = $request.headers;
     var lower = name.toLowerCase();
-    for (var k in h) {
-        if (k.toLowerCase() === lower) return h[k];
-    }
+    for (var k in h) if (k.toLowerCase() === lower) return h[k];
     return '';
 }
 
@@ -120,6 +127,14 @@ function walkObject(node, fn, depth) {
     }
 }
 
+/** 收藏集卡片里「空间背景」资源的结构签名 */
+function looksLikeSpaceBg(o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+    var a = o.animation;
+    if (!a || typeof a !== 'object' || Array.isArray(a)) return false;
+    return !!(a.animation_url || a.animation_backup_image || a.animation_first_frame);
+}
+
 // ─────────────────────────────────────────────────────────────
 // §1  注入页面里的那段代码（自包含，不可引用外部变量）
 // ─────────────────────────────────────────────────────────────
@@ -129,13 +144,20 @@ function overlayMain() {
     window.__BILI_GARB_UI__ = true;
 
     var SG = 'https://api.bilibili.com/x/garb/_sg';
-    var REG = {};        // id -> {id, name, cover, part}
-    var ORDER = [];      // 保持发现顺序
-    var state = { item_id: '', name: '' };
+    var SUIT = {};       // item_id      -> {kind:'suit', id, name, cover, part}
+    var CARD = {};       // card_type_id -> {kind:'card', id, name, cover}
+    var ORDER = [];      // [{k:'suit'|'card', id}]，保持发现顺序
+    var state = null;    // {kind, item_id|card_type_id, name}
     var applied = false;
 
     // ── 数据吸收 ────────────────────────────────────────────
-    function put(node) {
+    function push(kind, id, item) {
+        var store = kind === 'card' ? CARD : SUIT;
+        if (!store[id]) ORDER.push({ k: kind, id: id });
+        store[id] = item;
+    }
+
+    function putSuit(node) {
         var raw = node.item_id;
         if (typeof raw !== 'number' && typeof raw !== 'string') return;
         var id = String(raw);
@@ -146,13 +168,41 @@ function overlayMain() {
         var cover = p.image_cover || p.image_preview || p.image || p.image_preview_small || '';
         if (!name && !cover) return;
 
-        if (!REG[id]) ORDER.push(id);
-        REG[id] = {
+        push('suit', id, {
+            kind: 'suit',
             id: id,
             name: String(name || ('#' + id)),
             cover: String(cover || ''),
             part: (typeof node.part_id === 'number') ? node.part_id : null
-        };
+        });
+    }
+
+    function putCard(info, fallbackId, fallbackName, fallbackImg) {
+        var raw = (info && info.id) || fallbackId;
+        if (typeof raw !== 'number' && typeof raw !== 'string') return;
+        var id = String(raw);
+        if (!id || id === '0') return;
+
+        var name = (info && info.name) || fallbackName || '';
+        var cover = '';
+        if (info) {
+            cover = info.overview_image
+                || (info.content && info.content.animation && info.content.animation.animation_backup_image)
+                || (info.space_background && info.space_background.animation
+                    && info.space_background.animation.animation_backup_image)
+                || (info.space_background && info.space_background.image)
+                || '';
+        }
+        cover = cover || fallbackImg || '';
+        if (!name && !cover) return;
+
+        push('card', id, {
+            kind: 'card',
+            id: id,
+            name: String(name || ('卡 #' + id)),
+            cover: String(cover || ''),
+            part: null
+        });
     }
 
     function walk(node, depth) {
@@ -162,7 +212,24 @@ function overlayMain() {
             return;
         }
         if (typeof node !== 'object') return;
-        if (Object.prototype.hasOwnProperty.call(node, 'item_id')) put(node);
+
+        // 装扮：item_id
+        if (Object.prototype.hasOwnProperty.call(node, 'item_id')) putSuit(node);
+
+        // 收藏集：detail/v2 的 {card_type_info:{...}}
+        if (node.card_type_info && typeof node.card_type_info === 'object') {
+            putCard(node.card_type_info);
+        }
+        // 收藏集：网格的 {card_type_id, card_name, card_img}
+        if (Object.prototype.hasOwnProperty.call(node, 'card_type_id')) {
+            putCard(null, node.card_type_id, node.card_name, node.card_img);
+        }
+        // 收藏集：背包的 {card_item:{card_type_id,...}}
+        if (node.card_item && typeof node.card_item === 'object' &&
+            Object.prototype.hasOwnProperty.call(node.card_item, 'card_type_id')) {
+            putCard(null, node.card_item.card_type_id, node.card_item.card_name, node.card_item.card_img);
+        }
+
         for (var k in node) {
             var v = node[k];
             if (v && typeof v === 'object') walk(v, depth + 1);
@@ -172,7 +239,8 @@ function overlayMain() {
     function absorbText(t) {
         if (!t || typeof t !== 'string') return;
         if (t.length > 4000000) return;
-        if (t.indexOf('item_id') < 0) return;
+        if (t.indexOf('item_id') < 0 && t.indexOf('card_type_id') < 0 &&
+            t.indexOf('card_type_info') < 0) return;
         try { walk(JSON.parse(t), 0); } catch (e) { }
     }
 
@@ -210,20 +278,36 @@ function overlayMain() {
         };
     }
 
-    // ── 当前页装扮 ──────────────────────────────────────────
+    // ── 当前页装扮 / 当前收藏集 ─────────────────────────────
     function qs(k) {
         var m = new RegExp('[?&]' + k + '=([^&#]*)').exec(location.href);
         return m ? decodeURIComponent(m[1]) : '';
     }
 
     function loadCurrent() {
-        var id = qs('id');
-        if (!id || !_fetch) return;
-        _fetch('https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' +
-            encodeURIComponent(id), { credentials: 'include' })
-            .then(function (r) { return r.text(); })
-            .then(absorbText)
-            .catch(function () { });
+        if (!_fetch) return;
+
+        // 装扮详情页：?id=<item_id>
+        var sid = qs('id');
+        if (sid) {
+            _fetch('https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' +
+                encodeURIComponent(sid), { credentials: 'include' })
+                .then(function (r) { return r.text(); })
+                .then(absorbText)
+                .catch(function () { });
+        }
+
+        // 收藏集详情页：?act_id=&lottery_id=
+        var act = qs('act_id');
+        var lot = qs('lottery_id');
+        if (act && lot) {
+            _fetch('https://api.bilibili.com/x/vas/dlc_act/lottery/detail/v2?act_id=' +
+                encodeURIComponent(act) + '&lottery_id=' + encodeURIComponent(lot),
+                { credentials: 'include' })
+                .then(function (r) { return r.text(); })
+                .then(absorbText)
+                .catch(function () { });
+        }
     }
 
     function loadState() {
@@ -231,10 +315,8 @@ function overlayMain() {
         return _fetch(SG + '/state', { credentials: 'include' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
-                if (j && j.code === 0 && j.data) {
-                    state = j.data;
-                    applied = true;
-                }
+                if (j && j.code === 0 && j.data) { state = j.data; applied = true; }
+                else { state = null; applied = false; }
             })
             .catch(function () { });
     }
@@ -255,7 +337,7 @@ function overlayMain() {
         '.bg-sheet{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;',
         'background:#fff;color:#18191c;border-radius:18px 18px 0 0;',
         'transform:translateY(103%);transition:transform .26s cubic-bezier(.22,.61,.36,1);',
-        'max-height:72vh;display:flex;flex-direction:column;overflow:hidden;',
+        'max-height:74vh;display:flex;flex-direction:column;overflow:hidden;',
         'font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;',
         'box-shadow:0 -8px 32px rgba(0,0,0,.16)}',
         '.bg-sheet.on{transform:translateY(0)}',
@@ -273,6 +355,8 @@ function overlayMain() {
 
         '.bg-list{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;',
         'padding:0 12px 4px;min-height:60px}',
+        '.bg-group{font-size:11.5px;color:#9499a0;letter-spacing:.4px;',
+        'padding:10px 8px 4px;font-weight:500}',
         '.bg-row{display:flex;align-items:center;gap:12px;padding:9px 6px;border-radius:12px}',
         '.bg-row:active{background:#f6f7f9}',
         '.bg-row.cur{background:#fff1f5}',
@@ -281,6 +365,9 @@ function overlayMain() {
         '.bg-meta{flex:1 1 auto;min-width:0}',
         '.bg-name{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.bg-sub{font-size:11.5px;color:#9499a0;margin-top:2px}',
+        '.bg-tag{display:inline-block;font-size:10px;line-height:1;padding:2px 5px;',
+        'border-radius:4px;background:#eef0f3;color:#787c85;margin-right:5px;vertical-align:1px}',
+        '.bg-tag.card{background:#e8f0ff;color:#4a72c4}',
         '.bg-apply{flex:0 0 auto;border:none;border-radius:14px;padding:6px 14px;',
         'background:#FB7299;color:#fff;font-size:12.5px;cursor:pointer}',
         '.bg-apply:active{opacity:.8}',
@@ -317,6 +404,8 @@ function overlayMain() {
         '.bg-row:active{background:#2a2b2f}',
         '.bg-thumb{background:#2a2b2f}',
         '.bg-sub{color:#787c85}',
+        '.bg-tag{background:#2a2b2f;color:#9499a0}',
+        '.bg-tag.card{background:#26314a;color:#7f9fd8}',
         '.bg-manual{border-top-color:#2a2b2f}',
         '.bg-input{background:#2a2b2f;border-color:#3a3b40;color:#e3e5e7}',
         '.bg-input:focus{background:#232428}',
@@ -343,26 +432,35 @@ function overlayMain() {
         toastTimer = setTimeout(function () { toastEl.classList.remove('on'); }, 2400);
     }
 
-    function partLabel(part) {
-        var M = { 1: '头像框', 2: '动态卡片', 3: '点赞效果', 4: '表情', 5: '表情包', 6: '装扮主', 7: '空间背景', 8: '勋章', 9: '主题', 10: '加载动画', 11: '进度条', 13: 'NFT' };
-        return (part != null && M[part]) ? M[part] : (part != null ? ('part ' + part) : '');
-    }
+    var PART_LABEL = {
+        1: '头像挂件', 2: '动态卡片', 3: '点赞效果', 4: '表情', 5: '表情包',
+        6: '套装', 7: '空间背景', 8: '评论背景', 9: '个性主题',
+        10: '加载动画', 11: '进度条', 12: '开屏画面', 13: '头像'
+    };
 
     function renderStatus() {
         if (!statusEl) return;
         if (applied && state && state.name) {
             statusEl.className = 'bg-status';
             statusEl.textContent = '当前应用：' + state.name +
-                (state.item_id ? '（#' + state.item_id + '）' : '');
+                (state.kind === 'card' ? '（收藏集）' : '（装扮）');
         } else {
             statusEl.className = 'bg-status off';
             statusEl.textContent = '未应用任何装扮 · 点下方任一行开始';
         }
     }
 
+    function curKey() {
+        if (!applied || !state) return '';
+        if (state.kind === 'card') return 'card:' + state.card_type_id;
+        return 'suit:' + state.item_id;
+    }
+
     function row(item) {
-        var r = el('div', 'bg-row');
-        if (applied && state && String(state.item_id) === String(item.id)) r.className = 'bg-row cur';
+        var key = item.kind + ':' + item.id;
+        var isCur = curKey() === key;
+
+        var r = el('div', 'bg-row' + (isCur ? ' cur' : ''));
 
         if (item.cover) {
             var img = el('img', 'bg-thumb');
@@ -376,16 +474,24 @@ function overlayMain() {
 
         var meta = el('div', 'bg-meta');
         meta.appendChild(el('div', 'bg-name', item.name));
-        var sub = '#' + item.id + (item.part != null ? ' · ' + partLabel(item.part) : '');
-        meta.appendChild(el('div', 'bg-sub', sub));
+
+        var sub = el('div', 'bg-sub');
+        sub.appendChild(el('span', 'bg-tag' + (item.kind === 'card' ? ' card' : ''),
+            item.kind === 'card' ? '收藏集' : '装扮'));
+        var tail = '#' + item.id;
+        if (item.kind === 'suit' && item.part != null) {
+            tail += ' · ' + (PART_LABEL[item.part] || ('part ' + item.part));
+        }
+        sub.appendChild(document.createTextNode(tail));
+        meta.appendChild(sub);
         r.appendChild(meta);
 
-        var isCur = applied && state && String(state.item_id) === String(item.id);
         var btn = el('button', 'bg-apply' + (isCur ? ' done' : ''), isCur ? '使用中' : '应用');
         btn.addEventListener('click', function (ev) {
             ev.stopPropagation();
             if (isCur) return;
-            apply(item.id, item.name);
+            if (item.kind === 'card') applyCard(item);
+            else applySuit(item);
         });
         r.appendChild(btn);
         return r;
@@ -395,20 +501,33 @@ function overlayMain() {
         if (!listEl) return;
         renderStatus();
 
-        var ids = ORDER.slice();
-        var cur = qs('id');
-        if (cur && REG[cur]) {
-            ids = [cur].concat(ids.filter(function (x) { return x !== cur; }));
+        var suits = [], cards = [];
+        for (var i = 0; i < ORDER.length; i++) {
+            var o = ORDER[i];
+            if (o.k === 'card') { if (CARD[o.id]) cards.push(CARD[o.id]); }
+            else { if (SUIT[o.id]) suits.push(SUIT[o.id]); }
+        }
+
+        // 当前页的装扮排最前
+        var pid = qs('id');
+        if (pid && SUIT[pid]) {
+            suits = [SUIT[pid]].concat(suits.filter(function (x) { return x.id !== pid; }));
         }
 
         listEl.innerHTML = '';
-        if (!ids.length) {
+        if (!suits.length && !cards.length) {
             listEl.appendChild(el('div', 'bg-empty',
-                '本页还没抓到装扮数据。\n往上滑一滑让页面加载列表，或在下方直接输入 item_id。'));
+                '本页还没抓到数据。\n往上滑一滑让页面加载，或在下方直接输入 item_id。'));
             return;
         }
-        for (var i = 0; i < ids.length && i < 200; i++) {
-            if (REG[ids[i]]) listEl.appendChild(row(REG[ids[i]]));
+
+        if (suits.length) {
+            listEl.appendChild(el('div', 'bg-group', '装扮 · ' + suits.length));
+            for (var s = 0; s < suits.length && s < 150; s++) listEl.appendChild(row(suits[s]));
+        }
+        if (cards.length) {
+            listEl.appendChild(el('div', 'bg-group', '收藏集卡片 · ' + cards.length));
+            for (var c = 0; c < cards.length && c < 150; c++) listEl.appendChild(row(cards[c]));
         }
     }
 
@@ -425,25 +544,38 @@ function overlayMain() {
         sheet.classList.remove('on');
     }
 
-    function apply(id, name) {
+    function afterApply(j, fallbackName) {
+        if (j && j.code === 0) {
+            state = j.data || null;
+            applied = !!state;
+            toast('已应用：' + ((state && state.name) || fallbackName) + '　重开 B站 生效');
+        } else {
+            toast('失败：' + ((j && j.message) || '未知错误'));
+        }
+        render();
+    }
+
+    function applySuit(item) {
         if (!_fetch) { toast('当前环境不支持请求'); return; }
         toast('应用中…');
-        _fetch(SG + '/apply?item_id=' + encodeURIComponent(id), { credentials: 'include' })
+        _fetch(SG + '/apply?item_id=' + encodeURIComponent(item.id), { credentials: 'include' })
             .then(function (r) { return r.json(); })
-            .then(function (j) {
-                if (j && j.code === 0) {
-                    state = j.data || { item_id: id, name: name };
-                    applied = true;
-                    toast('已应用：' + (state.name || name) + '　重开 B站 生效');
-                } else {
-                    toast('失败：' + ((j && j.message) || '未知错误'));
-                }
-                render();
-            })
-            .catch(function (e) {
-                toast('失败：' + (e && e.message ? e.message : e));
-                render();
-            });
+            .then(function (j) { afterApply(j, item.name); })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
+    }
+
+    function applyCard(item) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        var act = qs('act_id');
+        var lot = qs('lottery_id');
+        if (!act) { toast('拿不到 act_id，请在收藏集页面内操作'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply-card?act_id=' + encodeURIComponent(act) +
+            '&lottery_id=' + encodeURIComponent(lot) +
+            '&card_type_id=' + encodeURIComponent(item.id), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { afterApply(j, item.name); })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
     }
 
     function reset() {
@@ -451,7 +583,7 @@ function overlayMain() {
         _fetch(SG + '/clear', { credentials: 'include' })
             .then(function (r) { return r.json(); })
             .then(function () {
-                state = { item_id: '', name: '' };
+                state = null;
                 applied = false;
                 toast('已还原为真实装扮');
                 render();
@@ -504,7 +636,7 @@ function overlayMain() {
         go.addEventListener('click', function () {
             var v = String(input.value || '').replace(/\D/g, '');
             if (!v) { toast('先填一个 item_id'); return; }
-            apply(v, '#' + v);
+            applySuit({ id: v, name: '#' + v });
         });
         input.addEventListener('keydown', function (e) {
             if (e.key === 'Enter') go.click();
@@ -530,11 +662,9 @@ function overlayMain() {
         root.appendChild(toastEl);
         document.body.appendChild(root);
 
-        // 首屏吸收 + 状态同步
         loadCurrent();
         loadState().then(renderStatus, function () { });
 
-        // 跨路由存活
         ['pushState', 'replaceState'].forEach(function (k) {
             var orig = history[k];
             if (typeof orig !== 'function') return;
@@ -548,7 +678,6 @@ function overlayMain() {
             setTimeout(function () { loadCurrent(); if (sheet.classList.contains('on')) render(); }, 420);
         });
 
-        // 兜底：页面自己滚动加载新数据时，抽屉开着就跟着刷新
         setInterval(function () {
             if (sheet.classList.contains('on')) render();
         }, 1500);
@@ -612,6 +741,130 @@ function bridgeReply(obj) {
     });
 }
 
+function queryOf(url, name) {
+    var m = new RegExp('[?&]' + name + '=([^&#]*)').exec(url);
+    return m ? decodeURIComponent(m[1]) : '';
+}
+
+/** 从 detail/v2 的 item_list 里按 card_type_id 找一张卡 */
+function pickCard(detail, cardTypeId) {
+    if (!detail || !detail.item_list) return null;
+    for (var i = 0; i < detail.item_list.length; i++) {
+        var tier = detail.item_list[i];
+        var list = tier && tier.card_info_list;
+        if (!list) continue;
+        for (var j = 0; j < list.length; j++) {
+            var info = list[j] && list[j].card_type_info;
+            if (!info) continue;
+            if (String(info.id) === String(cardTypeId)) return info;
+        }
+    }
+    return null;
+}
+
+function doBridgeApplySuit(url) {
+    var id = queryOf(url, 'item_id');
+    if (!id) return bridgeReply({ code: -1, message: 'missing item_id' });
+
+    req({ url: 'https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' + id })
+        .then(function (r) {
+            var j;
+            try { j = JSON.parse(r.data); } catch (e) {
+                return bridgeReply({ code: -1, message: 'detail 解析失败' });
+            }
+            if (!j || j.code !== 0 || !j.data) {
+                return bridgeReply({ code: (j && j.code) || -1, message: (j && j.message) || 'detail 请求失败' });
+            }
+
+            var d = j.data;
+            writeState({ kind: 'suit', item_id: d.item_id, name: d.name, detail: d, at: Date.now() });
+
+            var items = d.suit_items || {};
+            var sk = firstPart(items.skin);
+            var ld = firstPart(items.loading);
+
+            bridgeReply({
+                code: 0,
+                data: {
+                    kind: 'suit',
+                    item_id: d.item_id,
+                    name: d.name,
+                    has_skin: !!(sk && sk.properties && sk.properties.package_url),
+                    has_loading: !!(ld && ld.properties && ld.properties.loading_url)
+                }
+            });
+        })
+        .catch(function (e) {
+            bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
+        });
+}
+
+function doBridgeApplyCard(url) {
+    var actId = queryOf(url, 'act_id');
+    var lotteryId = queryOf(url, 'lottery_id');
+    var cardTypeId = queryOf(url, 'card_type_id');
+
+    if (!actId) return bridgeReply({ code: -1, message: 'missing act_id' });
+    if (!cardTypeId) return bridgeReply({ code: -1, message: 'missing card_type_id' });
+
+    // lottery_id 缺失时先解析出来
+    var resolveLottery = lotteryId
+        ? Promise.resolve(lotteryId)
+        : req({ url: 'https://api.bilibili.com/x/vas/dlc_act/act/basic/v2?act_id=' + actId })
+            .then(function (r) {
+                var j = JSON.parse(r.data);
+                var list = (j && j.data && j.data.lottery_list) || [];
+                if (!list.length) throw new Error('该活动没有卡池');
+                return String(list[0].lottery_id);
+            });
+
+    resolveLottery
+        .then(function (lot) {
+            return req({
+                url: 'https://api.bilibili.com/x/vas/dlc_act/lottery/detail/v2?act_id=' +
+                    actId + '&lottery_id=' + lot
+            }).then(function (r) { return { lot: lot, raw: r.data }; });
+        })
+        .then(function (o) {
+            var j;
+            try { j = JSON.parse(o.raw); } catch (e) {
+                return bridgeReply({ code: -1, message: 'detail 解析失败' });
+            }
+            if (!j || j.code !== 0 || !j.data) {
+                return bridgeReply({ code: (j && j.code) || -1, message: (j && j.message) || 'detail 请求失败' });
+            }
+
+            var info = pickCard(j.data, cardTypeId);
+            if (!info) return bridgeReply({ code: -1, message: '该卡池里没有这张卡' });
+
+            writeState({
+                kind: 'card',
+                act_id: Number(actId) || actId,
+                lottery_id: Number(o.lot) || o.lot,
+                card_type_id: info.id,
+                name: info.name || ('卡 #' + info.id),
+                act_title: j.data.name || '',
+                card: info,
+                at: Date.now()
+            });
+
+            bridgeReply({
+                code: 0,
+                data: {
+                    kind: 'card',
+                    card_type_id: info.id,
+                    name: info.name || ('卡 #' + info.id),
+                    has_space_bg: looksLikeSpaceBg(info.space_background),
+                    has_content: !!(info.content && (info.content.image || info.content.animation)),
+                    has_splash: !!(info.splash && info.splash.resource)
+                }
+            });
+        })
+        .catch(function (e) {
+            bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
+        });
+}
+
 function doBridge() {
     var url = (typeof $request !== 'undefined' && $request.url) ? $request.url : '';
     var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
@@ -627,57 +880,17 @@ function doBridge() {
 
     if (/\/state$/.test(path)) {
         var st = readState();
+        if (!st) return bridgeReply({ code: 0, data: null });
         return bridgeReply({
             code: 0,
-            data: st ? { item_id: st.item_id, name: st.name } : null
+            data: st.kind === 'card'
+                ? { kind: 'card', card_type_id: st.card_type_id, name: st.name }
+                : { kind: 'suit', item_id: st.item_id, name: st.name }
         });
     }
 
-    if (/\/apply$/.test(path)) {
-        var m = /[?&]item_id=(\d+)/.exec(url);
-        if (!m) return bridgeReply({ code: -1, message: 'missing item_id' });
-
-        var id = m[1];
-        req({ url: 'https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' + id })
-            .then(function (r) {
-                var j;
-                try { j = JSON.parse(r.data); } catch (e) {
-                    return bridgeReply({ code: -1, message: 'detail 解析失败' });
-                }
-                if (!j || j.code !== 0 || !j.data) {
-                    return bridgeReply({
-                        code: (j && j.code) || -1,
-                        message: (j && j.message) || 'detail 请求失败'
-                    });
-                }
-
-                var d = j.data;
-                writeState({
-                    item_id: d.item_id,
-                    name: d.name,
-                    detail: d,
-                    at: Date.now()
-                });
-
-                var items = d.suit_items || {};
-                var hasSkin = !!(firstPart(items.skin) && firstPart(items.skin).properties);
-                var hasLoad = !!(firstPart(items.loading) && firstPart(items.loading).properties);
-
-                bridgeReply({
-                    code: 0,
-                    data: {
-                        item_id: d.item_id,
-                        name: d.name,
-                        has_skin: hasSkin,
-                        has_loading: hasLoad
-                    }
-                });
-            })
-            .catch(function (e) {
-                bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
-            });
-        return;
-    }
+    if (/\/apply-card$/.test(path)) return doBridgeApplyCard(url);
+    if (/\/apply$/.test(path)) return doBridgeApplySuit(url);
 
     bridgeReply({ code: -1, message: 'unknown bridge path' });
 }
@@ -689,7 +902,7 @@ function doBridge() {
 function doSpoofSkin() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var st = readState();
+    var st = readSuitState();
     if (!st) return finish({});
 
     var body;
@@ -744,10 +957,9 @@ function doSpoofSkin() {
 // §5 / §6  名片与空间页的按名覆盖
 // ─────────────────────────────────────────────────────────────
 
-/** 从已存 detail 里抽出可复用的三个伪装块 */
 function spoofParts(st) {
     var items = (st.detail && st.detail.suit_items) || {};
-    var out = { pendant: null, nameplate: null, color: '' };
+    var out = { pendant: null, color: '' };
 
     var pd = firstPart(items.pendant);
     if (pd && pd.properties && pd.properties.image) {
@@ -763,13 +975,10 @@ function spoofParts(st) {
     }
 
     var sk = firstPart(items.skin);
-    if (sk && sk.properties) {
-        if (sk.properties.color) out.color = sk.properties.color;
-    }
+    if (sk && sk.properties && sk.properties.color) out.color = sk.properties.color;
     return out;
 }
 
-/** 只改自己：能从 Cookie 拿到 uid 时，别人的名片原样放过 */
 function isSelf(obj) {
     var uid = selfUid();
     if (!uid) return true;
@@ -781,7 +990,7 @@ function isSelf(obj) {
 function doSpoofCard() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var st = readState();
+    var st = readSuitState();
     if (!st) return finish({});
 
     var body;
@@ -794,14 +1003,8 @@ function doSpoofCard() {
     var parts = spoofParts(st);
     var changed = false;
 
-    if (parts.pendant) {
-        card.pendant = parts.pendant;
-        changed = true;
-    }
-    if (parts.color) {
-        card.nickname_color = parts.color;
-        changed = true;
-    }
+    if (parts.pendant) { card.pendant = parts.pendant; changed = true; }
+    if (parts.color) { card.nickname_color = parts.color; changed = true; }
 
     if (!changed) return finish({});
     finish({ body: JSON.stringify(body) });
@@ -810,7 +1013,7 @@ function doSpoofCard() {
 function doSpoofSpace() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var st = readState();
+    var st = readSuitState();
     if (!st) return finish({});
 
     var body;
@@ -821,17 +1024,13 @@ function doSpoofSpace() {
     if (!parts.pendant && !parts.color) return finish({});
 
     var changed = false;
-
     walkObject(body.data, function (o) {
         if (!isSelf(o)) return;
-
-        if (parts.pendant &&
-            o.pendant && typeof o.pendant === 'object' && !Array.isArray(o.pendant)) {
+        if (parts.pendant && o.pendant && typeof o.pendant === 'object' && !Array.isArray(o.pendant)) {
             o.pendant = parts.pendant;
             changed = true;
         }
-        if (parts.color &&
-            typeof o.nickname_color === 'string' && o.nickname_color) {
+        if (parts.color && typeof o.nickname_color === 'string' && o.nickname_color) {
             o.nickname_color = parts.color;
             changed = true;
         }
@@ -842,7 +1041,44 @@ function doSpoofSpace() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// §7  分发
+// §7  mode=spoof-spacebg —— 收藏集卡片的空间背景
+// ─────────────────────────────────────────────────────────────
+
+function doSpoofSpaceBg() {
+    if (typeof $response === 'undefined' || !$response.body) return finish({});
+
+    var st = readState();
+    if (!st || st.kind !== 'card' || !st.card) return finish({});
+
+    var sb = st.card.space_background;
+    if (!looksLikeSpaceBg(sb)) return finish({});
+
+    var body;
+    try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
+    if (!body || !body.data || typeof body.data !== 'object') return finish({});
+
+    var changed = false;
+
+    if (looksLikeSpaceBg(body.data)) {
+        // 顶层就是背景本体
+        body.data.image = sb.image || body.data.image || null;
+        body.data.animation = sb.animation;
+        changed = true;
+    } else {
+        walkObject(body.data, function (o) {
+            if (!looksLikeSpaceBg(o)) return;
+            o.image = sb.image || o.image || null;
+            o.animation = sb.animation;
+            changed = true;
+        }, 0);
+    }
+
+    if (!changed) return finish({});
+    finish({ body: JSON.stringify(body) });
+}
+
+// ─────────────────────────────────────────────────────────────
+// §8  分发
 // ─────────────────────────────────────────────────────────────
 
 (function dispatch() {
@@ -853,6 +1089,7 @@ function doSpoofSpace() {
         else if (mode === 'spoof-skin') doSpoofSkin();
         else if (mode === 'spoof-card') doSpoofCard();
         else if (mode === 'spoof-space') doSpoofSpace();
+        else if (mode === 'spoof-spacebg') doSpoofSpaceBg();
         else finish({});
     } catch (e) {
         finish({});

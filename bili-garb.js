@@ -89,6 +89,157 @@ function clearState() {
     try { $persistentStore.write(null, STORE_KEY); } catch (e) {}
 }
 
+// ── 纯 JS MD5（Surge 的 JS 引擎没有 crypto） ─────────────────
+// 已用 md5("") / "abc" / "message digest" 和 B站 APP 签名测试向量校验过。
+function md5(str) {
+    function safeAdd(x, y) {
+        var lsw = (x & 0xffff) + (y & 0xffff);
+        var msw = (x >> 16) + (y >> 16) + (lsw >> 16);
+        return (msw << 16) | (lsw & 0xffff);
+    }
+    function rol(num, cnt) { return (num << cnt) | (num >>> (32 - cnt)); }
+    function cmn(q, a, b, x, s, t) { return safeAdd(rol(safeAdd(safeAdd(a, q), safeAdd(x, t)), s), b); }
+    function ff(a, b, c, d, x, s, t) { return cmn((b & c) | (~b & d), a, b, x, s, t); }
+    function gg(a, b, c, d, x, s, t) { return cmn((b & d) | (c & ~d), a, b, x, s, t); }
+    function hh(a, b, c, d, x, s, t) { return cmn(b ^ c ^ d, a, b, x, s, t); }
+    function ii(a, b, c, d, x, s, t) { return cmn(c ^ (b | ~d), a, b, x, s, t); }
+
+    var n = str.length;
+    var bytes = [];
+    for (var i = 0; i < n; i++) bytes.push(str.charCodeAt(i) & 0xff);
+
+    var bitLen = n * 8;
+    bytes.push(0x80);
+    while (bytes.length % 64 !== 56) bytes.push(0);
+    for (var k = 0; k < 8; k++) bytes.push((k < 4) ? ((bitLen >>> (8 * k)) & 0xff) : 0);
+
+    var x = [];
+    for (var w = 0; w < bytes.length; w += 4) {
+        x.push(bytes[w] | (bytes[w + 1] << 8) | (bytes[w + 2] << 16) | (bytes[w + 3] << 24));
+    }
+
+    var a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+
+    for (var j = 0; j < x.length; j += 16) {
+        var oa = a, ob = b, oc = c, od = d;
+
+        a = ff(a, b, c, d, x[j], 7, -680876936);
+        d = ff(d, a, b, c, x[j + 1], 12, -389564586);
+        c = ff(c, d, a, b, x[j + 2], 17, 606105819);
+        b = ff(b, c, d, a, x[j + 3], 22, -1044525330);
+        a = ff(a, b, c, d, x[j + 4], 7, -176418897);
+        d = ff(d, a, b, c, x[j + 5], 12, 1200080426);
+        c = ff(c, d, a, b, x[j + 6], 17, -1473231341);
+        b = ff(b, c, d, a, x[j + 7], 22, -45705983);
+        a = ff(a, b, c, d, x[j + 8], 7, 1770035416);
+        d = ff(d, a, b, c, x[j + 9], 12, -1958414417);
+        c = ff(c, d, a, b, x[j + 10], 17, -42063);
+        b = ff(b, c, d, a, x[j + 11], 22, -1990404162);
+        a = ff(a, b, c, d, x[j + 12], 7, 1804603682);
+        d = ff(d, a, b, c, x[j + 13], 12, -40341101);
+        c = ff(c, d, a, b, x[j + 14], 17, -1502002290);
+        b = ff(b, c, d, a, x[j + 15], 22, 1236535329);
+
+        a = gg(a, b, c, d, x[j + 1], 5, -165796510);
+        d = gg(d, a, b, c, x[j + 6], 9, -1069501632);
+        c = gg(c, d, a, b, x[j + 11], 14, 643717713);
+        b = gg(b, c, d, a, x[j], 20, -373897302);
+        a = gg(a, b, c, d, x[j + 5], 5, -701558691);
+        d = gg(d, a, b, c, x[j + 10], 9, 38016083);
+        c = gg(c, d, a, b, x[j + 15], 14, -660478335);
+        b = gg(b, c, d, a, x[j + 4], 20, -405537848);
+        a = gg(a, b, c, d, x[j + 9], 5, 568446438);
+        d = gg(d, a, b, c, x[j + 14], 9, -1019803690);
+        c = gg(c, d, a, b, x[j + 3], 14, -187363961);
+        b = gg(b, c, d, a, x[j + 8], 20, 1163531501);
+        a = gg(a, b, c, d, x[j + 13], 5, -1444681467);
+        d = gg(d, a, b, c, x[j + 2], 9, -51403784);
+        c = gg(c, d, a, b, x[j + 7], 14, 1735328473);
+        b = gg(b, c, d, a, x[j + 12], 20, -1926607734);
+
+        a = hh(a, b, c, d, x[j + 5], 4, -378558);
+        d = hh(d, a, b, c, x[j + 8], 11, -2022574463);
+        c = hh(c, d, a, b, x[j + 11], 16, 1839030562);
+        b = hh(b, c, d, a, x[j + 14], 23, -35309556);
+        a = hh(a, b, c, d, x[j + 1], 4, -1530992060);
+        d = hh(d, a, b, c, x[j + 4], 11, 1272893353);
+        c = hh(c, d, a, b, x[j + 7], 16, -155497632);
+        b = hh(b, c, d, a, x[j + 10], 23, -1094730640);
+        a = hh(a, b, c, d, x[j + 13], 4, 681279174);
+        d = hh(d, a, b, c, x[j], 11, -358537222);
+        c = hh(c, d, a, b, x[j + 3], 16, -722521979);
+        b = hh(b, c, d, a, x[j + 6], 23, 76029189);
+        a = hh(a, b, c, d, x[j + 9], 4, -640364487);
+        d = hh(d, a, b, c, x[j + 12], 11, -421815835);
+        c = hh(c, d, a, b, x[j + 15], 16, 530742520);
+        b = hh(b, c, d, a, x[j + 2], 23, -995338651);
+
+        a = ii(a, b, c, d, x[j], 6, -198630844);
+        d = ii(d, a, b, c, x[j + 7], 10, 1126891415);
+        c = ii(c, d, a, b, x[j + 14], 15, -1416354905);
+        b = ii(b, c, d, a, x[j + 5], 21, -57434055);
+        a = ii(a, b, c, d, x[j + 12], 6, 1700485571);
+        d = ii(d, a, b, c, x[j + 3], 10, -1894986606);
+        c = ii(c, d, a, b, x[j + 10], 15, -1051523);
+        b = ii(b, c, d, a, x[j + 1], 21, -2054922799);
+        a = ii(a, b, c, d, x[j + 8], 6, 1873313359);
+        d = ii(d, a, b, c, x[j + 15], 10, -30611744);
+        c = ii(c, d, a, b, x[j + 6], 15, -1560198380);
+        b = ii(b, c, d, a, x[j + 13], 21, 1309151649);
+        a = ii(a, b, c, d, x[j + 4], 6, -145523070);
+        d = ii(d, a, b, c, x[j + 11], 10, -1120210379);
+        c = ii(c, d, a, b, x[j + 2], 15, 718787259);
+        b = ii(b, c, d, a, x[j + 9], 21, -343485551);
+
+        a = safeAdd(a, oa); b = safeAdd(b, ob); c = safeAdd(c, oc); d = safeAdd(d, od);
+    }
+
+    function hex(num) {
+        var s = '', v;
+        for (var i = 0; i < 4; i++) {
+            v = (num >>> (i * 8)) & 0xff;
+            s += ('0' + v.toString(16)).slice(-2);
+        }
+        return s;
+    }
+    return hex(a) + hex(b) + hex(c) + hex(d);
+}
+
+// ── APP 签名（appkey + appsec） ──────────────────────────────
+var APPKEY = '27eb53fc9058f8c3';
+var APPSEC = 'c2ed53a74eeefe3cf99fbd01d8c9c375';
+var TOKEN_KEY = 'bili.garb.access_key';
+
+function readToken() {
+    try { return $persistentStore.read(TOKEN_KEY) || ''; } catch (e) { return ''; }
+}
+function writeToken(t) {
+    try { $persistentStore.write(String(t || ''), TOKEN_KEY); } catch (e) {}
+}
+
+/** sign = md5(sorted_query + appsec)，返回完整 query 串（含 sign） */
+function appSign(params) {
+    var keys = Object.keys(params).sort();
+    var q = keys.map(function (k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(String(params[k]));
+    }).join('&');
+    return q + '&sign=' + md5(q + APPSEC);
+}
+
+/** 带 APP 签名的 GET，自动补 appkey/ts/platform/build 和 access_key */
+function appGet(path, params) {
+    var p = {};
+    for (var k in params) if (Object.prototype.hasOwnProperty.call(params, k)) p[k] = params[k];
+    p.appkey = APPKEY;
+    p.ts = Math.round(Date.now() / 1000);
+    p.platform = 'ios';
+    p.mobi_app = 'iphone';
+    p.build = '91601100';
+    var ak = readToken();
+    if (ak) p.access_key = ak;
+    return req({ url: 'https://api.bilibili.com' + path + '?' + appSign(p) });
+}
+
 function firstPart(v) {
     if (Array.isArray(v)) return v.length ? v[0] : null;
     if (v && typeof v === 'object') return v;
@@ -633,120 +784,6 @@ function overlayMain() {
             .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
     }
 
-    function mergeLocal(dst, src) {
-        var n = 0;
-        for (var k in src) {
-            var v = src[k];
-            if (!v) continue;
-            if (!Array.isArray(v) || !v.length) continue;
-            dst[k] = dst[k] ? dst[k].concat(v) : v;
-            n++;
-        }
-        return n;
-    }
-
-    /**
-     * 13 位素材 id 只有登录态接口认（x/garb/internal/v2/mall/suit/detail），
-     * 而登录态只在页面里，所以解析必须在这边做，做完再 POST 给桥接落盘。
-     */
-    var INTERNAL_BASE = 'https://api.bilibili.com/x/garb/internal/v2/mall/suit/detail?item_id=';
-    // 对照用的已知装扮 id（鹿乃桜帆），用来区分接口层拒绝和这套拒绝
-    var CONTROL_ID = '36438';
-
-    // 参数组合由松到紧。part=/from= 传空串可能被判非法（-403），所以先试完全不传。
-    var VARIANTS = [
-        { tag: 'bare', q: '' },
-        { tag: 'part9', q: '&part=9' },
-        { tag: 'part6', q: '&part=6' },
-        { tag: 'app', q: '&mobi_app=iphone&platform=ios&build=91601100&web_location=333.40212' }
-    ];
-
-    /** 打一次 internal 接口，返回 {code, message, data} */
-    function tryInternal(id, q) {
-        return _fetch(INTERNAL_BASE + encodeURIComponent(id) + q, { credentials: 'include' })
-            .then(function (r) { return r.json(); })
-            .then(function (j) {
-                return { code: (j && j.code), message: (j && j.message) || '', data: (j && j.data) || null };
-            })
-            .catch(function (e) {
-                return { code: 'ERR', message: String(e && e.message ? e.message : e), data: null };
-            });
-    }
-
-    function resolveInternal(ctx) {
-        var merged = {};
-        var hitId = 0;
-        var ids = (ctx && ctx.ids) || [];
-        var diag = [];
-        var winQ = null;      // 命中的参数组合
-        var i = 0;
-
-        function absorb(r, id, tag) {
-            var d = r.code === 0 && r.data;
-            diag.push({
-                id: String(id),
-                via: tag,
-                code: r.code,
-                message: r.message,
-                keys: d ? Object.keys(d).slice(0, 14) : []
-            });
-            if (d && d.suit_items) {
-                if (mergeLocal(merged, d.suit_items) > 0 && !hitId) hitId = Number(id);
-                return true;
-            }
-            return false;
-        }
-
-        /** 第一个 id 用各组合探一遍，选出能通的那组 */
-        function probe(id) {
-            var k = 0;
-            function next() {
-                if (k >= VARIANTS.length) return Promise.resolve(null);
-                var v = VARIANTS[k++];
-                return tryInternal(id, v.q).then(function (r) {
-                    if (absorb(r, id, v.tag)) return v.q;
-                    return next();
-                });
-            }
-            return next();
-        }
-
-        function step() {
-            if (i >= ids.length) {
-                var has = Object.keys(merged).length > 0;
-                var pid = hitId || Number(ids[0]) || 0;
-                return Promise.resolve({
-                    diag: diag,
-                    payload: has ? {
-                        set_id: ctx.set_id,
-                        name: ctx.name,
-                        item_id: pid,
-                        detail: { item_id: pid, name: ctx.name, suit_items: merged }
-                    } : null
-                });
-            }
-            var id = ids[i++];
-
-            if (winQ === null) {
-                // 先用一个已知能用的装扮 id 做对照：区分「接口层拒绝」和「这套拒绝」
-                return tryInternal(CONTROL_ID, '').then(function (cr) {
-                    absorb(cr, CONTROL_ID, 'control');
-                    return probe(id).then(function (q) {
-                        winQ = (q === null) ? '' : q;
-                        return step();
-                    });
-                });
-            }
-
-            return tryInternal(id, winQ).then(function (r) {
-                absorb(r, id, 'win');
-                return step();
-            });
-        }
-
-        return step();
-    }
-
     function applySet(item) {
         if (!_fetch) { toast('当前环境不支持请求'); return; }
         var act = qs('act_id');
@@ -758,41 +795,9 @@ function overlayMain() {
             '&collect_id=' + encodeURIComponent(item.id), { credentials: 'include' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
-                if (j && j.code === -2 && j.data && j.data.ids) {
-                    toast('换登录态接口重试…');
-                    return resolveInternal(j.data).then(function (res) {
-                        if (!res.payload) {
-                            var ctrl = null, first = null;
-                            for (var k = 0; k < res.diag.length; k++) {
-                                var d = res.diag[k];
-                                if (d.via === 'control') ctrl = d;
-                                else if (!first) first = d;
-                            }
-                            var msg = '拿不到装扮包';
-                            if (ctrl) msg += '｜对照 ' + ctrl.id + '→' + ctrl.code + (ctrl.message ? ' ' + ctrl.message : '');
-                            if (first) msg += '｜素材→' + first.code + (first.message ? ' ' + first.message : '');
-                            toast(msg.slice(0, 110));
-                            // 把每个 id 的返回码留给 /dump 看
-                            return _fetch(SG + '/diag', {
-                                method: 'POST',
-                                credentials: 'include',
-                                body: JSON.stringify({
-                                    name: j.data.name,
-                                    set_id: j.data.set_id,
-                                    ids: j.data.ids,
-                                    diag: res.diag
-                                })
-                            }).catch(function () { }).then(function () { render(); });
-                        }
-                        // 不设 Content-Type，浏览器按 text/plain 发 → 简单请求，不触发预检
-                        return _fetch(SG + '/store-suit', {
-                            method: 'POST',
-                            credentials: 'include',
-                            body: JSON.stringify(res.payload)
-                        })
-                            .then(function (r2) { return r2.json(); })
-                            .then(function (j2) { afterApply(j2, item.name); });
-                    });
+                if (j && j.code === -3) {
+                    toast('需要 access_key —— 用 Safari 打开 /x/garb/_sg/set-token?access_key=你的令牌');
+                    return;
                 }
                 afterApply(j, item.name);
             })
@@ -1208,21 +1213,9 @@ function doBridgeApplySet(url) {
                 // 素材 id 解析不出来 —— 回落：按兑换物名字去商城搜同名装扮。
                 // 文档年代 redeem_item_id 就是普通装扮 item_id，老收藏集走这条能中。
                 return searchSuitByName(hit.redeem_item_name).then(function (cands) {
-                    if (!cands) {
-                        // 公开接口全部失败。13 位素材 id 只有登录态的内部接口认，
-                        // 交给页面（带 cookie）去试 internal/v2/mall/suit/detail。
-                        return bridgeReply({
-                            code: -2,
-                            message: '需要登录态接口解析',
-                            data: {
-                                set_id: String(collectId),
-                                name: hitName,
-                                act_id: actId,
-                                lottery_id: lotId,
-                                ids: ids
-                            }
-                        });
-                    }
+                    // 公开接口全部失败。13 位素材 id 只有 internal 接口认，
+                    // 而那个接口拒 cookie（-403），必须走 appkey+sign+access_key。
+                    if (!cands) return signedFallback(ids);
 
                     var found = {};
                     var n = 0;
@@ -1245,19 +1238,7 @@ function doBridgeApplySet(url) {
                     });
 
                     return c.then(function () {
-                        if (!n) {
-                            return bridgeReply({
-                                code: -2,
-                                message: '搜到同名装扮但拿不到装扮包，改走登录态接口',
-                                data: {
-                                    set_id: String(collectId),
-                                    name: hitName,
-                                    act_id: actId,
-                                    lottery_id: lotId,
-                                    ids: ids
-                                }
-                            });
-                        }
+                        if (!n) return signedFallback(ids);
                         return commit(found, 1, n, 'search');
                     });
                 });
@@ -1266,6 +1247,37 @@ function doBridgeApplySet(url) {
         .catch(function (e) {
             bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
         });
+
+    /** 用 access_key 走 APP 签名，直接问 internal 接口 */
+    function signedFallback(ids) {
+        if (!readToken()) {
+            return bridgeReply({
+                code: -3,
+                message: '需要 access_key',
+                data: { set_id: String(collectId), name: hitName, ids: ids }
+            });
+        }
+        var m2 = {}, hit2 = 0;
+        var chain2 = Promise.resolve();
+        ids.forEach(function (id) {
+            chain2 = chain2.then(function () {
+                return appGet('/x/garb/internal/v2/mall/suit/detail', { item_id: id })
+                    .then(function (r) {
+                        var d;
+                        try { d = JSON.parse(r.data); } catch (e) { return; }
+                        if (!d || d.code !== 0 || !d.data || !d.data.suit_items) return;
+                        if (mergeSuitItems(m2, d.data.suit_items) > 0 && !hit2) hit2 = Number(id);
+                    })
+                    .catch(function () { });
+            });
+        });
+        return chain2.then(function () {
+            if (!Object.keys(m2).length) {
+                return bridgeReply({ code: -1, message: 'access_key 也解析不出装扮包' });
+            }
+            return commit(m2, 1, hit2, 'signed');
+        });
+    }
 
     /** 收尾：写状态 + 回包 */
     function commit(items, resolved, primaryId, source) {
@@ -1397,6 +1409,21 @@ function doBridge() {
             if (d) diag = JSON.parse(d);
         } catch (e) { diag = null; }
         return bridgeReply({ code: 0, count: arr.length, data: arr, diag: diag });
+    }
+
+    if (path === '/x/garb/_sg/set-token') {
+        var ak = queryOf(url, 'access_key');
+        if (!ak) return bridgeReply({ code: -1, message: 'missing access_key' });
+        writeToken(ak);
+        return bridgeReply({ code: 0, data: { set: true, masked: ak.slice(0, 6) + '…' + ak.slice(-4) } });
+    }
+
+    if (path === '/x/garb/_sg/token-status') {
+        var t = readToken();
+        return bridgeReply({
+            code: 0,
+            data: t ? { set: true, masked: t.slice(0, 6) + '…' + t.slice(-4) } : { set: false }
+        });
     }
 
     if (path === '/x/garb/_sg/store-suit') return doBridgeStoreSuit();

@@ -55,6 +55,7 @@ function run(opts) {
     };
     vm.createContext(ctx);
     vm.runInContext(SRC, ctx, { filename: 'bili-garb.js' });
+    out.ctx = ctx;
 
     return new Promise(resolve => { setTimeout(() => resolve(out), 0); });
 }
@@ -302,7 +303,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         const j1 = JSON.parse(r1.done.response.body);
-        ok('全查不到时返回 -2（交给页面走登录态接口）', j1.code === -2, JSON.stringify(j1).slice(0, 160));
+        ok('没有 access_key 时返回 -3', j1.code === -3, JSON.stringify(j1).slice(0, 160));
         ok('回包里带上了素材 id 列表', !!(j1.data && j1.data.ids && j1.data.ids.length === 4));
         ok('回包里带上 collect_id 和名字', !!(j1.data && String(j1.data.set_id) === String(themeSet.collect_id) && j1.data.name));
         ok('全查不到时不落盘', !(KEY in r1.store));
@@ -373,7 +374,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         ok('缺 lottery_id 时自动解析', r3.requests[0].url.includes('act/basic/v2'));
-        ok('解析后仍走完整流程', JSON.parse(r3.done.response.body).code === -2);
+        ok('解析后仍走完整流程', JSON.parse(r3.done.response.body).code === -3);
     }
 
     console.log('\n[9c] mode=bridge — apply-set 按名字回落搜索');
@@ -435,7 +436,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         const j2 = JSON.parse(r2.done.response.body);
-        ok('搜到同名但没包 → 也转 -2', j2.code === -2 && !!(j2.data && j2.data.ids), j2.message);
+        ok('搜到同名但没包 → 也转 -3', j2.code === -3 && !!(j2.data && j2.data.ids), j2.message);
         ok('失败不落盘', !(KEY in r2.store));
     }
 
@@ -482,6 +483,94 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             ok(label + ' → -1 且不落盘',
                 JSON.parse(rb.done.response.body).code === -1 && !(KEY in rb.store));
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    console.log('\n[9e] MD5 / APP 签名 / access_key 路径');
+    {
+        const crypto = require('crypto');
+
+        // 先跑一次拿到 vm context
+        const base = await run({ argument: 'noop' });
+        const md5 = base.ctx.md5;
+        const appSign = base.ctx.appSign;
+        ok('md5 已挂到上下文', typeof md5 === 'function' && typeof appSign === 'function');
+
+        const vectors = [
+            ['', 'd41d8cd98f00b204e9800998ecf8427e'],
+            ['abc', '900150983cd24fb0d6963f7d28e17f72'],
+            ['message digest', 'f96b697d7cb7938d525a2f31aaf161d0'],
+            ['12345678901234567890123456789012345678901234567890123456789012345678901234567890',
+                '57edf4a22be3c955ac49da2e2107b67a']
+        ];
+        for (const [input, want] of vectors) {
+            ok('md5(' + (input ? JSON.stringify(input.slice(0, 12)) : '空串') + ')',
+                md5(input) === want, md5(input));
+        }
+
+        const q = appSign({ appkey: '27eb53fc9058f8c3', ts: 1, item_id: '36438' });
+        const [query, sign] = q.split('&sign=');
+        const expect = crypto.createHash('md5')
+            .update(query + 'c2ed53a74eeefe3cf99fbd01d8c9c375', 'latin1').digest('hex');
+        ok('appSign 的 sign 正确', sign === expect, sign + ' vs ' + expect);
+        ok('appSign 按 key 升序拼串',
+            query === 'appkey=27eb53fc9058f8c3&item_id=36438&ts=1', query);
+
+        // set-token / token-status
+        const rt = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/set-token?access_key=abcdef1234567890', method: 'GET', headers: {} }
+        });
+        const jt = JSON.parse(rt.done.response.body);
+        ok('set-token 返回 code 0', jt.code === 0);
+        ok('set-token 落盘了', rt.store['bili.garb.access_key'] === 'abcdef1234567890');
+        ok('set-token 回的是脱敏值', /^abcdef…7890$/.test(jt.data.masked), jt.data.masked);
+
+        const rs = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/token-status', method: 'GET', headers: {} },
+            store: rt.store
+        });
+        ok('token-status 说有', JSON.parse(rs.done.response.body).data.set === true);
+
+        const rs2 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/token-status', method: 'GET', headers: {} }
+        });
+        ok('没设时 token-status 说没有', JSON.parse(rs2.done.response.body).data.set === false);
+
+        const rt2 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/set-token', method: 'GET', headers: {} }
+        });
+        ok('set-token 缺参数返回 -1', JSON.parse(rt2.done.response.body).code === -1);
+
+        // 有 token 时 /apply-set 走签名路径
+        const COLLECT = JSON.parse(fs.readFileSync(path.join(__dirname, 'collect-114746.json'), 'utf8'));
+        const themeSet = COLLECT.data.collect_infos.find(c => c.redeem_item_type === 5);
+        const r4 = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=' + themeSet.collect_id,
+                method: 'GET', headers: {}
+            },
+            store: { 'bili.garb.access_key': 'tok1234567890' },
+            http: o => {
+                if (o.url.includes('collect_list')) return { body: JSON.stringify(COLLECT) };
+                if (o.url.includes('internal/v2/mall/suit/detail')) return { body: JSON.stringify(DETAIL) };
+                return { body: JSON.stringify({ code: 0, data: { suit_items: null } }) };
+            }
+        });
+        const j4 = JSON.parse(r4.done.response.body);
+        ok('有 token 时走签名路径并成功', j4.code === 0, JSON.stringify(j4).slice(0, 200));
+        ok('回包标了 source=signed', j4.data && j4.data.source === 'signed');
+        ok('认出了主题包', j4.data && j4.data.has_skin === true);
+
+        const signedReq = r4.requests.find(x => x.url.includes('internal/v2/mall/suit/detail'));
+        ok('签名请求带了 access_key', !!signedReq && signedReq.url.includes('access_key=tok1234567890'));
+        ok('签名请求带了 appkey', !!signedReq && signedReq.url.includes('appkey=27eb53fc9058f8c3'));
+        ok('签名请求带了 sign', !!signedReq && /&sign=[0-9a-f]{32}$/.test(signedReq.url));
+        ok('签名请求带了 ts', !!signedReq && /[?&]ts=\d{10}/.test(signedReq.url));
     }
 
     // ─────────────────────────────────────────────────────────

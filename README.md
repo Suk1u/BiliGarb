@@ -13,7 +13,7 @@
 | `BiliGarb.sgmodule` | 模块清单，七条脚本 + MITM |
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，154 条断言 |
+| `test/run.js` | 本地测试台，174 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -150,6 +150,36 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 
 ---
 
+## 设置 access_key
+
+收藏集的主题套装只能通过 App 签名的接口解析，需要你的一次性授权令牌。
+
+**取令牌**：抓一次 App 的任意请求，URL 里 `access_key=` 后面那串就是。
+
+**设令牌**：Safari 打开（Surge 要开着）
+
+```
+https://api.bilibili.com/x/garb/_sg/set-token?access_key=把令牌粘在这里
+```
+
+看到 `{"code":0,"data":{"set":true,"masked":"0b8be0…IIEC"}}` 就设好了。查状态：
+
+```
+https://api.bilibili.com/x/garb/_sg/token-status
+```
+
+令牌存在 `$persistentStore` 里，只在本机。**有效期大约 30 天**，过期了重新设一次。
+
+清掉：
+
+```
+https://api.bilibili.com/x/garb/_sg/set-token?access_key=
+```
+
+> 为什么不用 cookie：页面里的 cookie 打这个接口返回 `-403 访问权限不足`，连对照 id 也是。只有 App 身份能过。
+
+---
+
 ## 抓包（排查用）
 
 模块里带了一个旁观式抓包脚本，专门用来抓「使用 / 佩戴」前后的接口调用，好把没解析出来的装扮补进映射。
@@ -235,7 +265,7 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
    - `x/vas/dlc_act/*` 下 18 个接口里没有任何素材详情接口
    - `material/detail`、`collect_redeem/detail`、`act/material/list` → HTML 404
 
-   **但最后找到了另一条路。** 那个 13 位 id 不是「不存在」，是**只有登录态接口认**。
+   **但最后找到了另一条路。** 那个 13 位 id 不是「不存在」，是**只有 App 签名的接口认**。
 
    H5 页面自己用的根本不是公开的 `v2/mall/suit/detail`，而是：
 
@@ -251,7 +281,9 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
    2. 不行就按兑换物名字搜同名装扮
    3. 还不行，桥接返回 `code:-2` 把 id 列表交给页面；**页面用 `credentials:'include'` 去打 `internal/v2/mall/suit/detail`**，解析出来再 POST 回 `/store-suit` 落盘
 
-   第 3 步能成的前提是：那个 13 位 id 确实是某个装扮的 `item_id`。数据库里的证据支持这一点 —— `skin` 表里就有 `1716959545001`（`星空列车与白的旅行收藏集`，`part_id=9`）这种 13 位顶层条目。
+   实测这条路**走不通**：页面带 cookie 去打，返回 `-403 访问权限不足`，连已知能用的对照 id（`36438`）也是 `-403`。说明接口整体拒绝网页来源，跟具体是哪套素材无关。而只带 `appkey`+`sign`、不带 `access_key` 去调，返回 `-101 账号未登录`。
+
+   所以它要的是 **`appkey` + `sign` + `access_key`** 三件套 —— 也就是 App 的身份。现在模块就是这么做的：桥接层自己算 `md5(sorted_query + appsec)`，带上 `access_key` 直接问。需要你先设一次 `access_key`，见下面「设置 access_key」。
 
 6. **不是每套装扮都有主题部件。** 有 `suit_items.skin` 的才能换主题色和图标；只有 `loading` 的只能换加载动画；`part_id=9` 的纯主题套装反而没有卡片背景。
 
@@ -271,7 +303,7 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 154 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 174 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

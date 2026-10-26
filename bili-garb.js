@@ -649,35 +649,70 @@ function overlayMain() {
      * 13 位素材 id 只有登录态接口认（x/garb/internal/v2/mall/suit/detail），
      * 而登录态只在页面里，所以解析必须在这边做，做完再 POST 给桥接落盘。
      */
+    var INTERNAL_BASE = 'https://api.bilibili.com/x/garb/internal/v2/mall/suit/detail?item_id=';
+
+    /** 打一次 internal 接口，返回 {code, message, data} */
+    function tryInternal(id, extra) {
+        return _fetch(INTERNAL_BASE + encodeURIComponent(id) + '&part=&from=&from_id=' + (extra || ''),
+            { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                return { code: (j && j.code), message: (j && j.message) || '', data: (j && j.data) || null };
+            })
+            .catch(function (e) {
+                return { code: 'ERR', message: String(e && e.message ? e.message : e), data: null };
+            });
+    }
+
     function resolveInternal(ctx) {
         var merged = {};
         var hitId = 0;
         var ids = (ctx && ctx.ids) || [];
         var i = 0;
+        var diag = [];
+
+        // 第二轮补上 App 那套参数，万一服务端要
+        var EXTRA = '&mobi_app=iphone&platform=ios&build=91601100&web_location=333.40212';
 
         function step() {
             if (i >= ids.length) {
-                if (!Object.keys(merged).length) return Promise.resolve(null);
+                var has = Object.keys(merged).length > 0;
                 var pid = hitId || Number(ids[0]) || 0;
                 return Promise.resolve({
-                    set_id: ctx.set_id,
-                    name: ctx.name,
-                    item_id: pid,
-                    detail: { item_id: pid, name: ctx.name, suit_items: merged }
+                    diag: diag,
+                    payload: has ? {
+                        set_id: ctx.set_id,
+                        name: ctx.name,
+                        item_id: pid,
+                        detail: { item_id: pid, name: ctx.name, suit_items: merged }
+                    } : null
                 });
             }
             var id = ids[i++];
-            return _fetch('https://api.bilibili.com/x/garb/internal/v2/mall/suit/detail?item_id=' +
-                encodeURIComponent(id) + '&part=&from=&from_id=', { credentials: 'include' })
-                .then(function (r) { return r.json(); })
-                .then(function (j) {
-                    var d = j && j.code === 0 && j.data;
-                    if (d && d.suit_items) {
-                        if (mergeLocal(merged, d.suit_items) > 0 && !hitId) hitId = Number(id);
-                    }
+
+            function absorb(r, tag) {
+                var d = r.code === 0 && r.data;
+                diag.push({
+                    id: String(id),
+                    via: tag,
+                    code: r.code,
+                    message: r.message,
+                    keys: d ? Object.keys(d).slice(0, 14) : []
+                });
+                if (d && d.suit_items) {
+                    if (mergeLocal(merged, d.suit_items) > 0 && !hitId) hitId = Number(id);
+                    return true;
+                }
+                return false;
+            }
+
+            return tryInternal(id, '').then(function (r1) {
+                if (absorb(r1, 'plain')) return step();
+                return tryInternal(id, EXTRA).then(function (r2) {
+                    absorb(r2, 'app');
                     return step();
-                })
-                .catch(function () { return step(); });
+                });
+            });
         }
         return step();
     }
@@ -696,12 +731,28 @@ function overlayMain() {
                 if (j && j.code === -2 && j.data && j.data.ids) {
                     toast('换登录态接口重试…');
                     return resolveInternal(j.data).then(function (res) {
-                        if (!res) { toast('这套拿不到装扮包'); render(); return; }
+                        if (!res.payload) {
+                            var codes = res.diag.map(function (d) {
+                                return d.code + (d.message ? ' ' + d.message : '');
+                            }).join(' | ');
+                            toast('拿不到装扮包：' + (codes || '无响应').slice(0, 90));
+                            // 把每个 id 的返回码留给 /dump 看
+                            return _fetch(SG + '/diag', {
+                                method: 'POST',
+                                credentials: 'include',
+                                body: JSON.stringify({
+                                    name: j.data.name,
+                                    set_id: j.data.set_id,
+                                    ids: j.data.ids,
+                                    diag: res.diag
+                                })
+                            }).catch(function () { }).then(function () { render(); });
+                        }
                         // 不设 Content-Type，浏览器按 text/plain 发 → 简单请求，不触发预检
                         return _fetch(SG + '/store-suit', {
                             method: 'POST',
                             credentials: 'include',
-                            body: JSON.stringify(res)
+                            body: JSON.stringify(res.payload)
                         })
                             .then(function (r2) { return r2.json(); })
                             .then(function (j2) { afterApply(j2, item.name); });
@@ -1290,14 +1341,26 @@ function doBridge() {
         });
     }
 
+    if (path === '/x/garb/_sg/diag') {
+        var body = (typeof $request !== 'undefined' && $request.body) || '';
+        try { $persistentStore.write(String(body).slice(0, 8000), 'bili.garb.diag'); } catch (e) {}
+        return bridgeReply({ code: 0 });
+    }
+
     if (path === '/x/garb/_sg/dump/clear') {
         try { $persistentStore.write(null, CAP_KEY); } catch (e) {}
+        try { $persistentStore.write(null, 'bili.garb.diag'); } catch (e) {}
         return bridgeReply({ code: 0, data: [] });
     }
 
     if (path === '/x/garb/_sg/dump') {
         var arr = capRead();
-        return bridgeReply({ code: 0, count: arr.length, data: arr });
+        var diag = null;
+        try {
+            var d = $persistentStore.read('bili.garb.diag');
+            if (d) diag = JSON.parse(d);
+        } catch (e) { diag = null; }
+        return bridgeReply({ code: 0, count: arr.length, data: arr, diag: diag });
     }
 
     if (path === '/x/garb/_sg/store-suit') return doBridgeStoreSuit();

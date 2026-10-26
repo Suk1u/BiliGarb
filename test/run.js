@@ -804,6 +804,31 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         const jd = JSON.parse(rd.done.response.body);
         ok('dump 返回条数', jd.count === 20 && jd.data.length === 20);
 
+        // 诊断回传
+        const DIAG = { name: '水果篮子个性主题', set_id: '114749', ids: ['1', '2'], diag: [{ id: '1', code: -101, message: '账号未登录', keys: [] }] };
+        const rg = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/diag', method: 'POST', body: JSON.stringify(DIAG) },
+            store
+        });
+        ok('diag 返回 code 0', JSON.parse(rg.done.response.body).code === 0);
+
+        const rd2 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/dump', method: 'GET', headers: {} },
+            store: rg.store
+        });
+        const jd2 = JSON.parse(rd2.done.response.body);
+        ok('dump 里带上了 diag', !!(jd2.diag && jd2.diag.diag && jd2.diag.diag[0].code === -101));
+        ok('diag 里保留了原始 id 列表', !!(jd2.diag && jd2.diag.ids && jd2.diag.ids.length === 2));
+
+        const rc2 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/dump/clear', method: 'GET', headers: {} },
+            store: rg.store
+        });
+        ok('dump/clear 连 diag 一起清', !('bili.garb.diag' in rc2.store));
+
         const rc = await run({
             argument: 'mode=bridge',
             request: { url: 'https://api.bilibili.com/x/garb/_sg/dump/clear', method: 'GET', headers: {} },

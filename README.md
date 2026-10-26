@@ -13,7 +13,7 @@
 | `BiliGarb.sgmodule` | 模块清单，七条脚本 + MITM |
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，150 条断言 |
+| `test/run.js` | 本地测试台，154 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -184,6 +184,8 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 
 看到 `body` 里出现 5~9 位的 `item_id`，就是真装扮 id，能直接写进映射；看到 `act_id` + `card_type_id`，说明服务端按活动解析，那就得换条路。
 
+`dump` 返回里还有个 `diag` 字段：当收藏集套装走登录态接口失败时，页面会把**每个 id 的返回码和 message** 回传到这里。排查 `-101` 这类问题时先看它。
+
 ### 按钮点不动怎么办
 
 收藏集的奖励是**领取型**，不是佩戴型 —— 没达到条件时按钮只显示「进行中 0/4」，点不动，也就走不到素材预览页，抓不到解析请求。
@@ -269,7 +271,7 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 150 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 154 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

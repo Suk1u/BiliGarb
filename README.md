@@ -215,6 +215,26 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 
    要真正穿上新版素材套装，得等它兑换后进「我的装扮」，那时会拿到真实 `item_id`，在装扮列表里直接选就行。
 
+   **这条已经用真机抓包查死了。** 抓包确认 App 打开「抽卡奖励」页时调的是：
+
+   ```
+   GET x/vas/dlc_act/lottery/home_reward_preview
+       ?act_id=&lottery_id=&anchor_id=<collect_id>&preview_type=2&show_source=2
+   ```
+
+   `anchor_id` 就是 `collect_id`。这个接口**免登录**能调，`preview_type=1` 返回 12 张卡，`preview_type=2` 返回 4 条兑换奖励。但四条奖励的 `modules` 全是 `null`，`redeem_item_id` 原样吐回来那串素材 id，只多了张静态预览图和一段 mp4。
+
+   连同下面这些一起，全部排除过了，没有一条能把素材 id 换成装扮 id：
+
+   - `suit/detail?item_id=<素材id>`（含 `part` 参数的各种取值）→ `suit_items:null`
+   - `x/garb/v2/mall/home/search?key_word=` 与 `x/garb/vas/search?key_word=` → 0 条
+   - `x/garb/vas/goods/list?anchor_id=<collect_id>` → 0 条
+   - `x/vas/dlc_act/home_reward_preview`（`preview_type` 1/2/3/4 × `show_source` 1/2 全试）→ `modules:null`
+   - `x/vas/dlc_act/*` 下 18 个接口里没有任何素材详情接口
+   - `material/detail`、`collect_redeem/detail`、`act/material/list` → HTML 404
+
+   **结论：那四个 id 是服务端句柄，公开接口换不出装扮包。这套不先兑换就穿不上，不是方法没找到。**
+
 6. **不是每套装扮都有主题部件。** 有 `suit_items.skin` 的才能换主题色和图标；只有 `loading` 的只能换加载动画；`part_id=9` 的纯主题套装反而没有卡片背景。
 
 7. **挂件伪装多数不生效。** `suit_items.pendant` 在 schema 里有，但线上抓的套装（36438、42193）都没有这个键。没有就只改名字颜色。
@@ -256,5 +276,22 @@ node test/run.js
 
 - API 文档：`Suk1u/bilibili-API-collect`（`docs/garb/*`、`docs/misc/sign/*`）
 - Surge 手册：`manual.nssurge.com`
-- 两个外壳、套装详情、卡池详情、卡池网格：线上实抓，2026-10-26
+- 两个外壳、套装详情、卡池详情、卡池网格、兑换物列表：线上实抓，2026-10-26
 - `part_id` 对照表：`mall-h5-major` bundle 内的枚举（1 头像挂件 / 2 动态卡片 / 3 点赞效果 / 4 表情 / 5 表情包 / 6 套装 / 7 空间背景 / 8 评论背景 / 9 个性主题 / 10 加载动画 / 11 进度条 / 12 开屏画面 / 13 头像）
+
+### 顺带确认的免登录接口
+
+真机抓包时验证过的，写在这里省得以后再摸：
+
+```
+GET x/vas/dlc_act/lottery/home_reward_preview   收藏集奖励预览（anchor_id = collect_id）
+    ?act_id=&lottery_id=&anchor_id=&preview_type=&show_source=
+    preview_type=1 → 12 张卡；preview_type=2 → 兑换奖励列表
+
+GET x/garb/vas/search?key_word=&pn=&ps=          App 侧搜索，收藏集也在结果里
+GET x/garb/vas/goods/list?anchor_id=&biz_type=   商品列表，biz_type 1=装扮 4=收藏集
+GET x/garb/vas/goods/list_filter                 biz_type / group_id_v2 的筛选项
+GET x/garb/mall_v2/nav                           商城导航
+```
+
+以上都免登录。`x/garb/vas/*` 这一族是 App 用的，比 H5 那套 `x/garb/v2/mall/*` 覆盖面更宽。

@@ -574,6 +574,88 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
     }
 
     // ─────────────────────────────────────────────────────────
+    console.log('\n[9f] mode=bridge — set-equip（收藏集主题资源包）');
+    {
+        const PACK = {
+            user_equip: {
+                id: 1780036210001,
+                name: '从零开始的异世界',
+                preview: 'https://i0.hdslb.com/bfs/garb/x.png',
+                ver: '1780054798',
+                package_url: 'https://i0.hdslb.com/bfs/garb/zip/abc.zip',
+                data: { color_mode: 'light', color: '#000000', color_second_page: '#F3E5EB', tail_color: '#0066FF', tail_color_selected: '#D400B9' }
+            },
+            id: 1780036210001,
+            name: '从零开始的异世界',
+            load_equip: { id: 1780036045001, name: 'Re0加载', loading_url: 'https://i0.hdslb.com/bfs/baselabs/op/x.webp', ver: '1780632001' },
+            play_icon: { id: 1780036069001, middle_png: 'https://x/m.png' }
+        };
+
+        const r = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/set-equip?json=' + encodeURIComponent(JSON.stringify(PACK)),
+                method: 'GET', headers: {}
+            }
+        });
+        const j = JSON.parse(r.done.response.body);
+        ok('set-equip 返回 code 0', j.code === 0, JSON.stringify(j).slice(0, 160));
+        ok('回包带名字', j.data && j.data.name === '从零开始的异世界');
+        ok('标了有加载动画', j.data && j.data.has_loading === true);
+        ok('标了有进度条', j.data && j.data.has_play_icon === true);
+
+        const st = JSON.parse(r.store[KEY]);
+        ok('落盘 kind=equip', st.kind === 'equip');
+        ok('落盘了整块 user_equip', !!(st.user_equip && st.user_equip.package_url));
+        ok('落盘了 load_equip', !!(st.load_equip && st.load_equip.loading_url));
+
+        // state 要能回传 equip
+        const rs = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/state', method: 'GET', headers: {} },
+            store: r.store
+        });
+        const js = JSON.parse(rs.done.response.body);
+        ok('state 回传 kind=equip', js.data && js.data.kind === 'equip' && js.data.id === 1780036210001);
+
+        // 裸 user_equip 也能收
+        const r2 = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/set-equip?json=' + encodeURIComponent(JSON.stringify(PACK.user_equip)),
+                method: 'GET', headers: {}
+            }
+        });
+        ok('裸 user_equip 也能收', JSON.parse(r2.done.response.body).code === 0);
+        ok('裸的时候没有 load_equip', JSON.parse(r2.store[KEY]).load_equip === null);
+
+        // 坏输入
+        const bads = [
+            ['没有 json', 'https://api.bilibili.com/x/garb/_sg/set-equip'],
+            ['坏 json', 'https://api.bilibili.com/x/garb/_sg/set-equip?json=' + encodeURIComponent('{oops')],
+            ['缺 package_url', 'https://api.bilibili.com/x/garb/_sg/set-equip?json=' + encodeURIComponent(JSON.stringify({ id: 1, name: 'x' }))]
+        ];
+        for (const [label, u] of bads) {
+            const rb = await run({ argument: 'mode=bridge', request: { url: u, method: 'GET', headers: {} } });
+            ok(label + ' → -1 且不落盘', JSON.parse(rb.done.response.body).code === -1 && !(KEY in rb.store));
+        }
+
+        // spoof-skin 用 equip 态
+        const skinResp = { code: 0, data: { user_equip: { id: 2, name: '默认', package_url: 'https://x/d.zip' }, skin_colors: [{ id: 2 }], load_equip: { id: 1 } } };
+        const r3 = await run({
+            argument: 'mode=spoof-skin',
+            response: { headers: {}, body: JSON.stringify(skinResp) },
+            store: r.store
+        });
+        const j3 = JSON.parse(r3.done.body);
+        ok('user_equip 整块换成资源包的', j3.data.user_equip.id === 1780036210001);
+        ok('package_url 是资源包那个', /abc\.zip$/.test(j3.data.user_equip.package_url));
+        ok('主题色跟着换了', j3.data.user_equip.data.color === '#000000');
+        ok('load_equip 也换了', j3.data.load_equip.id === 1780036045001);
+        ok('skin_colors 原样保留', j3.data.skin_colors.length === 1);
+    }
+
+    // ─────────────────────────────────────────────────────────
     console.log('\n[10] mode=spoof-skin — 改写主题 + 加载动画');
     {
         const skinResp = {

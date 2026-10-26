@@ -70,6 +70,7 @@ function readState() {
         if (!s) return null;
         var o = JSON.parse(s);
         if (!o) return null;
+        if (o.kind === 'equip') return o.user_equip ? o : null;
         if (o.kind === 'card') return o.card ? o : null;
         return o.detail ? o : null;
     } catch (e) { return null; }
@@ -78,7 +79,7 @@ function readState() {
 /** 只要装扮态；收藏集态返回 null */
 function readSuitState() {
     var s = readState();
-    return (s && s.kind !== 'card' && s.detail) ? s : null;
+    return (s && s.kind !== 'card' && s.kind !== 'equip' && s.detail) ? s : null;
 }
 
 function writeState(o) {
@@ -638,7 +639,8 @@ function overlayMain() {
         if (applied && state && state.name) {
             statusEl.className = 'bg-status';
             statusEl.textContent = '当前应用：' + state.name +
-                (state.kind === 'card' ? '（收藏集）' : '（装扮）');
+                (state.kind === 'card' ? '（收藏集卡片）'
+                    : (state.kind === 'equip' ? '（收藏集主题）' : '（装扮）'));
         } else {
             statusEl.className = 'bg-status off';
             statusEl.textContent = '未应用任何装扮 · 点下方任一行开始';
@@ -648,6 +650,7 @@ function overlayMain() {
     function curKey() {
         if (!applied || !state) return '';
         if (state.set_id) return 'set:' + state.set_id;
+        if (state.kind === 'equip') return 'equip:' + state.id;
         if (state.kind === 'card') return 'card:' + state.card_type_id;
         return 'suit:' + state.item_id;
     }
@@ -1365,6 +1368,49 @@ function doBridgeStoreSuit() {
     });
 }
 
+/**
+ * 收藏集主题套装：直接把资源包里的 user_equip 块存下来。
+ * 13 位素材 id 的 package_url 公开接口拿不到，只能靠资源包供给。
+ * 接受 {user_equip, load_equip, play_icon} 或裸的 user_equip 对象。
+ */
+function doBridgeSetEquip(url) {
+    var raw = (typeof $request !== 'undefined' && $request.body) || '';
+    if (!raw) raw = queryOf(url, 'json');
+    if (!raw) return bridgeReply({ code: -1, message: 'missing json' });
+
+    var p;
+    try { p = JSON.parse(raw); } catch (e) {
+        return bridgeReply({ code: -1, message: 'json 解析失败' });
+    }
+
+    var ue = p.user_equip || p;
+    if (!ue || ue.id == null || !ue.package_url) {
+        return bridgeReply({ code: -1, message: '缺 user_equip.id 或 package_url' });
+    }
+
+    var st = {
+        kind: 'equip',
+        id: ue.id,
+        name: ue.name || ('主题 #' + ue.id),
+        user_equip: ue,
+        load_equip: p.load_equip || null,
+        play_icon: p.play_icon || null,
+        at: Date.now()
+    };
+    writeState(st);
+
+    bridgeReply({
+        code: 0,
+        data: {
+            kind: 'equip',
+            id: ue.id,
+            name: st.name,
+            has_loading: !!st.load_equip,
+            has_play_icon: !!st.play_icon
+        }
+    });
+}
+
 function doBridge() {
     var url = (typeof $request !== 'undefined' && $request.url) ? $request.url : '';
     var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
@@ -1385,7 +1431,9 @@ function doBridge() {
             code: 0,
             data: st.kind === 'card'
                 ? { kind: 'card', card_type_id: st.card_type_id, name: st.name }
-                : { kind: 'suit', item_id: st.item_id, name: st.name, set_id: st.set_id || '' }
+                : (st.kind === 'equip'
+                    ? { kind: 'equip', id: st.id, name: st.name }
+                    : { kind: 'suit', item_id: st.item_id, name: st.name, set_id: st.set_id || '' })
         });
     }
 
@@ -1426,6 +1474,7 @@ function doBridge() {
         });
     }
 
+    if (path === '/x/garb/_sg/set-equip') return doBridgeSetEquip(url);
     if (path === '/x/garb/_sg/store-suit') return doBridgeStoreSuit();
     if (path === '/x/garb/_sg/apply-card') return doBridgeApplyCard(url);
     if (path === '/x/garb/_sg/apply-set') return doBridgeApplySet(url);
@@ -1441,12 +1490,24 @@ function doBridge() {
 function doSpoofSkin() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var st = readSuitState();
-    if (!st) return finish({});
+    var any = readState();
+    if (!any) return finish({});
 
     var body;
     try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
     if (!body || !body.data) return finish({});
+
+    // 收藏集主题套装：直接套用现成的 user_equip 块（来自资源包）
+    if (any.kind === 'equip') {
+        var hit = false;
+        if (any.user_equip) { body.data.user_equip = any.user_equip; hit = true; }
+        if (any.load_equip) { body.data.load_equip = any.load_equip; hit = true; }
+        if (!hit) return finish({});
+        return finish({ body: JSON.stringify(body) });
+    }
+
+    var st = readSuitState();
+    if (!st) return finish({});
 
     var items = (st.detail && st.detail.suit_items) || {};
     var sk = firstPart(items.skin);

@@ -13,7 +13,7 @@
 | `BiliGarb.sgmodule` | 模块清单，七条脚本 + MITM |
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，174 条断言 |
+| `test/run.js` | 本地测试台，192 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -180,6 +180,46 @@ https://api.bilibili.com/x/garb/_sg/set-token?access_key=
 
 ---
 
+## 收藏集主题套装（资源包）
+
+13 位素材 id 的 `package_url` 公开接口拿不到 —— 那个接口是 App 独占的，网页带 cookie 也是 `-403`。所以这类主题只能靠**资源包**喂进来。
+
+社区整理的资源包里有个 `xxx_trans.json`，长这样：
+
+```json
+{
+  "user_equip": {
+    "id": 1780036210001,
+    "name": "从零开始的异世界",
+    "preview": "https://i0.hdslb.com/bfs/garb/xxx.png",
+    "ver": "1780054798",
+    "package_url": "https://i0.hdslb.com/bfs/garb/zip/xxx.zip",
+    "data": { "color_mode": "light", "color": "#000000", "color_second_page": "#F3E5EB",
+              "tail_color": "#0066FF", "tail_color_selected": "#D400B9" }
+  },
+  "load_equip": { "id": 1780036045001, "name": "Re0加载", "loading_url": "...", "ver": "..." },
+  "play_icon": { ... }
+}
+```
+
+**这就是 `resource/show/skin` 要的 `user_equip` 结构本身**，`id` 就是那个 13 位素材 id，`package_url` 指向 B站 CDN 上的主题 zip。
+
+把它整份塞进 URL 打开（Surge 要开着）：
+
+```
+https://api.bilibili.com/x/garb/_sg/set-equip?json=<URL 编码后的整份 JSON>
+```
+
+看到 `{"code":0,"data":{"kind":"equip","name":"…","has_loading":true}}` 就设好了。之后 `resource/show/skin` 会被整块替换成这份配置，主题色、侧栏图标、加载动画一起换。重开 B站 生效。
+
+只传裸的 `user_equip` 对象也行（那就只换主题，不带加载动画）。
+
+清掉用 `/clear`，和别的状态一样。
+
+> 这套机制对**任何**你手里有资源包的主题都通用，不限收藏集。
+
+---
+
 ## 抓包（排查用）
 
 模块里带了一个旁观式抓包脚本，专门用来抓「使用 / 佩戴」前后的接口调用，好把没解析出来的装扮补进映射。
@@ -303,7 +343,7 @@ https://api.bilibili.com/x/garb/_sg/set-token?access_key=
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 174 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 192 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

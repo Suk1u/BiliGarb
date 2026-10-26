@@ -20,32 +20,19 @@
 
 ## 安装
 
-### 1. 放文件
+### 1. 装模块
 
-把 `bili-garb.js` 和 `BiliGarb.sgmodule` 放进 Surge 的配置目录。
-
-- **Surge Mac**：`~/Library/Application Support/com.nssurge.surge-mac/Profiles/`
-- **Surge iOS**：文件 App → 我的 iPhone → Surge → 把两个文件拷进去
-
-模块里写的是相对路径 `script-path=bili-garb.js`，所以两个文件必须和模块在同一个目录。
-
-如果要把模块发到 GitHub 给别人装，把每条 `script-path=bili-garb.js` 换成 raw 地址：
+Surge → 首页 → 模块 → 右上角 `+` → 从 URL 导入，填：
 
 ```
-script-path=https://raw.githubusercontent.com/<你>/<仓库>/main/bili-garb.js
+https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 ```
 
-国内 raw.githubusercontent 经常连不上，用 jsDelivr 更稳：
+模块里的 `script-path` 已经指向 jsDelivr 上的脚本，不需要手动放任何文件。
 
-```
-script-path=https://cdn.jsdelivr.net/gh/<你>/<仓库>@main/bili-garb.js
-```
+想改成跟仓库同步开发，也可以把 `bili-garb.js` 和 `BiliGarb.sgmodule` 放进 Surge 配置目录，再把每条 `script-path` 换成本地相对路径 `bili-garb.js`。
 
-### 2. 装模块
-
-Surge → 首页 → 模块 → 右上角 `+` → 从文件导入 → 选 `BiliGarb.sgmodule`。
-
-### 3. 开 MITM
+### 2. 开 MITM
 
 模块已经声明了 hostname，Surge 会自动装证书。确认两件事：
 

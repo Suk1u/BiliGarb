@@ -279,7 +279,104 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
     }
 
     // ─────────────────────────────────────────────────────────
-    console.log('\n[9] mode=spoof-skin — 改写主题 + 加载动画');
+    console.log('\n[9] mode=bridge — apply-set（收藏集兑换物 · 主题套装）');
+    {
+        const COLLECT = JSON.parse(fs.readFileSync(path.join(__dirname, 'collect-114746.json'), 'utf8'));
+        const themeSet = COLLECT.data.collect_infos.find(c => c.redeem_item_type === 5);
+
+        ok('夹具里有静态主题套装', !!themeSet, JSON.stringify(COLLECT.data.collect_infos.map(c => c.redeem_item_type)));
+        ok('它的 redeem_item_id 是 & 串起来的 4 个 id',
+            String(themeSet.redeem_item_id).split('&').length === 4);
+
+        // 情形一：四个 id 在装扮库里都查不到（线上真实情况）
+        const r1 = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=' + themeSet.collect_id,
+                method: 'GET', headers: {}
+            },
+            http: o => {
+                if (o.url.includes('collect_list')) return { body: JSON.stringify(COLLECT) };
+                // suit/detail 对素材 id 只返回空壳
+                return { body: JSON.stringify({ code: 0, data: { suit_items: null } }) };
+            }
+        });
+        const j1 = JSON.parse(r1.done.response.body);
+        ok('全查不到时返回 -1', j1.code === -1, JSON.stringify(j1).slice(0, 160));
+        ok('错误信息说清楚了', /素材|装扮包/.test(j1.message), j1.message);
+        ok('全查不到时不落盘', !(KEY in r1.store));
+        ok('四个 id 各试了一次', r1.requests.filter(x => x.url.includes('suit/detail')).length === 4);
+
+        // 情形二：其中一个 id 能解析出装扮包 → 合并后成功
+        const r2 = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=' + themeSet.collect_id,
+                method: 'GET', headers: {}
+            },
+            http: o => {
+                if (o.url.includes('collect_list')) return { body: JSON.stringify(COLLECT) };
+                if (o.url.includes('1792139382001')) return { body: JSON.stringify(DETAIL) };
+                return { body: JSON.stringify({ code: 0, data: { suit_items: null } }) };
+            }
+        });
+        const j2 = JSON.parse(r2.done.response.body);
+        ok('有能解析的就成功', j2.code === 0, JSON.stringify(j2).slice(0, 200));
+        ok('resolved 计数正确', j2.data && j2.data.resolved === 1);
+        ok('合并出了 skin 部件', !!(j2.data && j2.data.has_skin));
+        ok('名字用兑换物名', j2.data && j2.data.name === themeSet.redeem_item_name);
+        ok('记下了 set_id', j2.data && String(j2.data.set_id) === String(themeSet.collect_id));
+
+        const st = JSON.parse(r2.store[KEY]);
+        ok('落盘 kind=suit（复用装扮伪装）', st.kind === 'suit');
+        ok('落盘带 set_id', String(st.set_id) === String(themeSet.collect_id));
+        ok('落盘的 detail 里有合并后的部件', !!st.detail.suit_items.skin);
+
+        // state 要能回传 set_id，抽屉才知道哪一行是「使用中」
+        const r3 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/state', method: 'GET', headers: {} },
+            store: r2.store
+        });
+        const j3 = JSON.parse(r3.done.response.body);
+        ok('state 回传 set_id', j3.data && String(j3.data.set_id) === String(themeSet.collect_id));
+    }
+
+    console.log('\n[9b] mode=bridge — apply-set 边界');
+    {
+        const COLLECT = JSON.parse(fs.readFileSync(path.join(__dirname, 'collect-114746.json'), 'utf8'));
+
+        const r1 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=999', method: 'GET', headers: {} },
+            http: () => ({ body: JSON.stringify(COLLECT) })
+        });
+        ok('collect_id 不存在返回 -1', JSON.parse(r1.done.response.body).code === -1);
+
+        const medal = COLLECT.data.collect_infos.find(c => c.redeem_item_type === 1001);
+        const r2 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&lottery_id=114747&collect_id=' + medal.collect_id, method: 'GET', headers: {} },
+            http: () => ({ body: JSON.stringify(COLLECT) })
+        });
+        const j2 = JSON.parse(r2.done.response.body);
+        ok('没有 redeem_item_id 的（勋章）返回 -1', j2.code === -1 && /没有素材 id/.test(j2.message), j2.message);
+
+        const r3 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply-set?act_id=114746&collect_id=114749', method: 'GET', headers: {} },
+            http: o => {
+                if (o.url.includes('act/basic/v2')) return { body: JSON.stringify(ACT_BASIC) };
+                if (o.url.includes('collect_list')) return { body: JSON.stringify(COLLECT) };
+                return { body: JSON.stringify({ code: 0, data: { suit_items: null } }) };
+            }
+        });
+        ok('缺 lottery_id 时自动解析', r3.requests[0].url.includes('act/basic/v2'));
+        ok('解析后仍走完整流程', JSON.parse(r3.done.response.body).code === -1);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    console.log('\n[10] mode=spoof-skin — 改写主题 + 加载动画');
     {
         const skinResp = {
             code: 0,
@@ -306,7 +403,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('$done 只调用一次', r.calls === 1);
     }
 
-    console.log('\n[10] mode=spoof-skin — 无状态 / 坏 JSON 放行');
+    console.log('\n[10b] mode=spoof-skin — 无状态 / 坏 JSON 放行');
     {
         const r = await run({
             argument: 'mode=spoof-skin',

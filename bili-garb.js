@@ -146,13 +146,14 @@ function overlayMain() {
     var SG = 'https://api.bilibili.com/x/garb/_sg';
     var SUIT = {};       // item_id      -> {kind:'suit', id, name, cover, part}
     var CARD = {};       // card_type_id -> {kind:'card', id, name, cover}
-    var ORDER = [];      // [{k:'suit'|'card', id}]，保持发现顺序
+    var SET = {};        // collect_id   -> {kind:'set',  id, name, cover, typeName, ids}
+    var ORDER = [];      // [{k:'suit'|'card'|'set', id}]，保持发现顺序
     var state = null;    // {kind, item_id|card_type_id, name}
     var applied = false;
 
     // ── 数据吸收 ────────────────────────────────────────────
     function push(kind, id, item) {
-        var store = kind === 'card' ? CARD : SUIT;
+        var store = kind === 'card' ? CARD : (kind === 'set' ? SET : SUIT);
         if (!store[id]) ORDER.push({ k: kind, id: id });
         store[id] = item;
     }
@@ -205,6 +206,25 @@ function overlayMain() {
         });
     }
 
+    /** 收藏集兑换物：主题套装 / 头像挂件 / 表情包 / 评论背景 */
+    function putSet(node) {
+        if (node.collect_id == null) return;
+        if (!node.redeem_item_name && !node.redeem_item_image) return;
+
+        var raw = String(node.redeem_item_id || '');
+        var ids = raw ? raw.split('&').filter(function (x) { return /^\d+$/.test(x); }) : [];
+
+        push('set', String(node.collect_id), {
+            kind: 'set',
+            id: String(node.collect_id),
+            name: String(node.redeem_item_name || ('兑换物 #' + node.collect_id)),
+            cover: String(node.redeem_item_image || ''),
+            part: null,
+            typeName: String(node.redeem_item_type_name || ''),
+            ids: ids
+        });
+    }
+
     function walk(node, depth) {
         if (!node || depth > 8) return;
         if (Array.isArray(node)) {
@@ -215,6 +235,9 @@ function overlayMain() {
 
         // 装扮：item_id
         if (Object.prototype.hasOwnProperty.call(node, 'item_id')) putSuit(node);
+
+        // 收藏集兑换物
+        if (Object.prototype.hasOwnProperty.call(node, 'redeem_item_type')) putSet(node);
 
         // 收藏集：detail/v2 的 {card_type_info:{...}}
         if (node.card_type_info && typeof node.card_type_info === 'object') {
@@ -240,7 +263,7 @@ function overlayMain() {
         if (!t || typeof t !== 'string') return;
         if (t.length > 4000000) return;
         if (t.indexOf('item_id') < 0 && t.indexOf('card_type_id') < 0 &&
-            t.indexOf('card_type_info') < 0) return;
+            t.indexOf('card_type_info') < 0 && t.indexOf('redeem_item_type') < 0) return;
         try { walk(JSON.parse(t), 0); } catch (e) { }
     }
 
@@ -307,7 +330,28 @@ function overlayMain() {
                 .then(function (r) { return r.text(); })
                 .then(absorbText)
                 .catch(function () { });
+            loadCollect(act, lot);
+        } else if (act) {
+            // 只有 act_id 的页面（穿戴页），先解析 lottery_id 再拉兑换物
+            _fetch('https://api.bilibili.com/x/vas/dlc_act/act/basic/v2?act_id=' +
+                encodeURIComponent(act), { credentials: 'include' })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    var list = (j && j.data && j.data.lottery_list) || [];
+                    if (list.length) loadCollect(act, String(list[0].lottery_id));
+                })
+                .catch(function () { });
         }
+    }
+
+    /** 收藏集兑换物：主题套装 / 头像挂件 / 表情包 / 评论背景 */
+    function loadCollect(act, lot) {
+        _fetch('https://api.bilibili.com/x/vas/dlc_act/lottery/collect_list?act_id=' +
+            encodeURIComponent(act) + '&lottery_id=' + encodeURIComponent(lot),
+            { credentials: 'include' })
+            .then(function (r) { return r.text(); })
+            .then(absorbText)
+            .catch(function () { });
     }
 
     function loadState() {
@@ -452,6 +496,7 @@ function overlayMain() {
 
     function curKey() {
         if (!applied || !state) return '';
+        if (state.set_id) return 'set:' + state.set_id;
         if (state.kind === 'card') return 'card:' + state.card_type_id;
         return 'suit:' + state.item_id;
     }
@@ -476,11 +521,15 @@ function overlayMain() {
         meta.appendChild(el('div', 'bg-name', item.name));
 
         var sub = el('div', 'bg-sub');
-        sub.appendChild(el('span', 'bg-tag' + (item.kind === 'card' ? ' card' : ''),
-            item.kind === 'card' ? '收藏集' : '装扮'));
+        var isCollect = item.kind === 'card' || item.kind === 'set';
+        sub.appendChild(el('span', 'bg-tag' + (isCollect ? ' card' : ''),
+            isCollect ? '收藏集' : '装扮'));
+
         var tail = '#' + item.id;
         if (item.kind === 'suit' && item.part != null) {
             tail += ' · ' + (PART_LABEL[item.part] || ('part ' + item.part));
+        } else if (item.kind === 'set' && item.typeName) {
+            tail = item.typeName;
         }
         sub.appendChild(document.createTextNode(tail));
         meta.appendChild(sub);
@@ -491,6 +540,7 @@ function overlayMain() {
             ev.stopPropagation();
             if (isCur) return;
             if (item.kind === 'card') applyCard(item);
+            else if (item.kind === 'set') applySet(item);
             else applySuit(item);
         });
         r.appendChild(btn);
@@ -501,10 +551,11 @@ function overlayMain() {
         if (!listEl) return;
         renderStatus();
 
-        var suits = [], cards = [];
+        var suits = [], cards = [], sets = [];
         for (var i = 0; i < ORDER.length; i++) {
             var o = ORDER[i];
             if (o.k === 'card') { if (CARD[o.id]) cards.push(CARD[o.id]); }
+            else if (o.k === 'set') { if (SET[o.id]) sets.push(SET[o.id]); }
             else { if (SUIT[o.id]) suits.push(SUIT[o.id]); }
         }
 
@@ -515,7 +566,7 @@ function overlayMain() {
         }
 
         listEl.innerHTML = '';
-        if (!suits.length && !cards.length) {
+        if (!suits.length && !cards.length && !sets.length) {
             listEl.appendChild(el('div', 'bg-empty',
                 '本页还没抓到数据。\n往上滑一滑让页面加载，或在下方直接输入 item_id。'));
             return;
@@ -528,6 +579,10 @@ function overlayMain() {
         if (cards.length) {
             listEl.appendChild(el('div', 'bg-group', '收藏集卡片 · ' + cards.length));
             for (var c = 0; c < cards.length && c < 150; c++) listEl.appendChild(row(cards[c]));
+        }
+        if (sets.length) {
+            listEl.appendChild(el('div', 'bg-group', '收藏集兑换物 · ' + sets.length));
+            for (var t = 0; t < sets.length && t < 60; t++) listEl.appendChild(row(sets[t]));
         }
     }
 
@@ -573,6 +628,20 @@ function overlayMain() {
         _fetch(SG + '/apply-card?act_id=' + encodeURIComponent(act) +
             '&lottery_id=' + encodeURIComponent(lot) +
             '&card_type_id=' + encodeURIComponent(item.id), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { afterApply(j, item.name); })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
+    }
+
+    function applySet(item) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        var act = qs('act_id');
+        var lot = qs('lottery_id');
+        if (!act) { toast('拿不到 act_id，请在收藏集页面内操作'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply-set?act_id=' + encodeURIComponent(act) +
+            '&lottery_id=' + encodeURIComponent(lot) +
+            '&collect_id=' + encodeURIComponent(item.id), { credentials: 'include' })
             .then(function (r) { return r.json(); })
             .then(function (j) { afterApply(j, item.name); })
             .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
@@ -865,6 +934,133 @@ function doBridgeApplyCard(url) {
         });
 }
 
+/** 把多个套装部件的 suit_items 合并成一份 */
+function mergeSuitItems(target, src) {
+    var got = 0;
+    for (var k in src) {
+        if (!src[k]) continue;
+        var v = src[k];
+        if (!Array.isArray(v) || !v.length) continue;
+        if (!target[k]) target[k] = v;
+        else if (Array.isArray(target[k])) target[k] = target[k].concat(v);
+        got++;
+    }
+    return got;
+}
+
+/** 收藏集兑换物：主题套装等，redeem_item_id 是 & 串起来的素材 id */
+function doBridgeApplySet(url) {
+    var actId = queryOf(url, 'act_id');
+    var lotteryId = queryOf(url, 'lottery_id');
+    var collectId = queryOf(url, 'collect_id');
+
+    if (!actId) return bridgeReply({ code: -1, message: 'missing act_id' });
+    if (!collectId) return bridgeReply({ code: -1, message: 'missing collect_id' });
+
+    var resolveLottery = lotteryId
+        ? Promise.resolve(lotteryId)
+        : req({ url: 'https://api.bilibili.com/x/vas/dlc_act/act/basic/v2?act_id=' + actId })
+            .then(function (r) {
+                var j = JSON.parse(r.data);
+                var list = (j && j.data && j.data.lottery_list) || [];
+                if (!list.length) throw new Error('该活动没有卡池');
+                return String(list[0].lottery_id);
+            });
+
+    resolveLottery
+        .then(function (lot) {
+            return req({
+                url: 'https://api.bilibili.com/x/vas/dlc_act/lottery/collect_list?act_id=' +
+                    actId + '&lottery_id=' + lot
+            }).then(function (r) { return { lot: lot, raw: r.data }; });
+        })
+        .then(function (o) {
+            var j;
+            try { j = JSON.parse(o.raw); } catch (e) {
+                return bridgeReply({ code: -1, message: 'collect_list 解析失败' });
+            }
+            var infos = (j && j.data && j.data.collect_infos) || [];
+            var hit = null;
+            for (var i = 0; i < infos.length; i++) {
+                if (String(infos[i].collect_id) === String(collectId)) { hit = infos[i]; break; }
+            }
+            if (!hit) return bridgeReply({ code: -1, message: '没找到这个兑换物' });
+
+            var raw = String(hit.redeem_item_id || '');
+            var ids = raw ? raw.split('&').filter(function (x) { return /^\d+$/.test(x); }) : [];
+
+            if (!ids.length) {
+                return bridgeReply({
+                    code: -1,
+                    message: '「' + (hit.redeem_item_name || '该兑换物') + '」没有素材 id，无法解析'
+                });
+            }
+
+            // 逐个试 suit/detail，能解析出 suit_items 的才并进来
+            var merged = {};
+            var resolved = 0;
+            var chain = Promise.resolve();
+
+            ids.forEach(function (id) {
+                chain = chain.then(function () {
+                    return req({ url: 'https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' + id })
+                        .then(function (r) {
+                            var d;
+                            try { d = JSON.parse(r.data); } catch (e) { return; }
+                            if (!d || d.code !== 0 || !d.data || !d.data.suit_items) return;
+                            if (mergeSuitItems(merged, d.data.suit_items) > 0) resolved++;
+                        })
+                        .catch(function () { });
+                });
+            });
+
+            return chain.then(function () {
+                var keys = Object.keys(merged);
+                if (!keys.length) {
+                    return bridgeReply({
+                        code: -1,
+                        message: '这套是收藏集素材，' + ids.length +
+                            ' 个 id 在装扮库里都查不到装扮包，穿不上'
+                    });
+                }
+
+                var detail = {
+                    item_id: Number(ids[0]),
+                    name: hit.redeem_item_name || ('兑换物 #' + collectId),
+                    suit_items: merged
+                };
+
+                writeState({
+                    kind: 'suit',
+                    set_id: String(collectId),
+                    item_id: detail.item_id,
+                    name: detail.name,
+                    detail: detail,
+                    act_id: Number(actId) || actId,
+                    lottery_id: Number(o.lot) || o.lot,
+                    at: Date.now()
+                });
+
+                bridgeReply({
+                    code: 0,
+                    data: {
+                        kind: 'suit',
+                        set_id: String(collectId),
+                        item_id: detail.item_id,
+                        name: detail.name,
+                        resolved: resolved,
+                        parts: keys,
+                        has_skin: !!(firstPart(merged.skin) && firstPart(merged.skin).properties
+                            && firstPart(merged.skin).properties.package_url)
+                    }
+                });
+            });
+        })
+        .catch(function (e) {
+            bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
+        });
+}
+
 function doBridge() {
     var url = (typeof $request !== 'undefined' && $request.url) ? $request.url : '';
     var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
@@ -885,11 +1081,12 @@ function doBridge() {
             code: 0,
             data: st.kind === 'card'
                 ? { kind: 'card', card_type_id: st.card_type_id, name: st.name }
-                : { kind: 'suit', item_id: st.item_id, name: st.name }
+                : { kind: 'suit', item_id: st.item_id, name: st.name, set_id: st.set_id || '' }
         });
     }
 
     if (/\/apply-card$/.test(path)) return doBridgeApplyCard(url);
+    if (/\/apply-set$/.test(path)) return doBridgeApplySet(url);
     if (/\/apply$/.test(path)) return doBridgeApplySuit(url);
 
     bridgeReply({ code: -1, message: 'unknown bridge path' });

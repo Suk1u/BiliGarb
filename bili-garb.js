@@ -1419,7 +1419,52 @@ function doCapture() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// §9  分发
+// §9  mode=fake-unlock —— 诊断用：让收藏集奖励看起来可领取
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 收藏集的奖励是「领取」型，没达到条件时按钮只是「进行中0/4」，
+ * 点不动，也就走不到素材预览页，抓不到解析请求。
+ * 这个模式只改客户端看到的进度数字，让按钮变成可点，
+ * 好让人点进去触发那个预览接口。服务端该拒还是拒，不会真发东西。
+ *
+ * 只在诊断时启用，正常使用请关掉对应的模块。
+ */
+function doFakeUnlock() {
+    if (typeof $response === 'undefined' || !$response.body) return finish({});
+
+    var body;
+    try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
+    if (!body || !body.data) return finish({});
+
+    var lists = [];
+    if (body.data.collect_infos) lists.push(body.data.collect_infos);
+    if (body.data.collect_list && body.data.collect_list.collect_infos) {
+        lists.push(body.data.collect_list.collect_infos);
+    }
+    if (!lists.length) return finish({});
+
+    var changed = 0;
+    lists.forEach(function (arr) {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(function (c) {
+            if (!c || typeof c !== 'object') return;
+            var need = Number(c.require_item_amount);
+            if (!(need > 0)) return;
+            if (Number(c.owned_item_amount) >= need) return;
+
+            c.owned_item_amount = need;
+            c.redeem_btn_text = '领取';
+            changed++;
+        });
+    });
+
+    if (!changed) return finish({});
+    finish({ body: JSON.stringify(body) });
+}
+
+// ─────────────────────────────────────────────────────────────
+// §10  分发
 // ─────────────────────────────────────────────────────────────
 
 (function dispatch() {
@@ -1432,6 +1477,7 @@ function doCapture() {
         else if (mode === 'spoof-card') doSpoofCard();
         else if (mode === 'spoof-space') doSpoofSpace();
         else if (mode === 'spoof-spacebg') doSpoofSpaceBg();
+        else if (mode === 'fake-unlock') doFakeUnlock();
         else finish({});
     } catch (e) {
         finish({});

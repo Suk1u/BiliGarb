@@ -767,7 +767,54 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
     }
 
     // ─────────────────────────────────────────────────────────
-    console.log('\n[19] 未知 mode / 无 argument / 裸 token');
+    console.log('\n[19] mode=fake-unlock — 诊断：让奖励显示可领取');
+    {
+        const COLLECT = JSON.parse(fs.readFileSync(path.join(__dirname, 'collect-114746.json'), 'utf8'));
+        const before = COLLECT.data.collect_infos.map(c => c.owned_item_amount);
+
+        const r = await run({
+            argument: 'fake-unlock',
+            response: { headers: {}, body: JSON.stringify(COLLECT) }
+        });
+        const j = JSON.parse(r.done.body);
+        const infos = j.data.collect_infos;
+
+        ok('进度被填满', infos.every(c => Number(c.owned_item_amount) === Number(c.require_item_amount)),
+            JSON.stringify(infos.map(c => c.owned_item_amount)));
+        ok('按钮文案变成领取', infos.every(c => c.redeem_btn_text === '领取'));
+        ok('原夹具没被改动（深拷贝生效）', before.every(v => v === 0));
+        ok('名字和 id 都没动', infos[2].collect_id === 114749 && infos[2].redeem_item_name === '水果篮子个性主题');
+        ok('$done 只调用一次', r.calls === 1);
+
+        // lottery_home_detail 的形状：collect_list.collect_infos
+        const NESTED = { code: 0, data: { lottery_id: 1, collect_list: { collect_infos: JSON.parse(JSON.stringify(COLLECT.data.collect_infos)) } } };
+        const r2 = await run({
+            argument: 'fake-unlock',
+            response: { headers: {}, body: JSON.stringify(NESTED) }
+        });
+        const j2 = JSON.parse(r2.done.body);
+        ok('嵌套 collect_list 也能改',
+            j2.data.collect_list.collect_infos.every(c => c.redeem_btn_text === '领取'));
+
+        // 已经满了的不重复改
+        const full = JSON.parse(JSON.stringify(COLLECT));
+        full.data.collect_infos.forEach(c => { c.owned_item_amount = c.require_item_amount; });
+        const r3 = await run({
+            argument: 'fake-unlock',
+            response: { headers: {}, body: JSON.stringify(full) }
+        });
+        ok('已经满的直接放行', r3.done.body === undefined);
+
+        // 无关响应不动
+        const r4 = await run({
+            argument: 'fake-unlock',
+            response: { headers: {}, body: JSON.stringify({ code: 0, data: { user_equip: {} } }) }
+        });
+        ok('无关响应放行', r4.done.body === undefined);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    console.log('\n[20] 未知 mode / 无 argument / 裸 token');
     {
         const r1 = await run({ argument: '', response: { headers: {}, body: '{}' } });
         ok('空 argument 放行', r1.done && r1.done.body === undefined && r1.calls === 1);

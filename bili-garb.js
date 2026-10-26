@@ -1144,12 +1144,12 @@ function doBridge() {
         return bridgeReply({ code: 0 });
     }
 
-    if (/\/clear$/.test(path)) {
+    if (path === '/x/garb/_sg/clear') {
         clearState();
         return bridgeReply({ code: 0, data: null });
     }
 
-    if (/\/state$/.test(path)) {
+    if (path === '/x/garb/_sg/state') {
         var st = readState();
         if (!st) return bridgeReply({ code: 0, data: null });
         return bridgeReply({
@@ -1160,9 +1160,19 @@ function doBridge() {
         });
     }
 
-    if (/\/apply-card$/.test(path)) return doBridgeApplyCard(url);
-    if (/\/apply-set$/.test(path)) return doBridgeApplySet(url);
-    if (/\/apply$/.test(path)) return doBridgeApplySuit(url);
+    if (path === '/x/garb/_sg/dump/clear') {
+        try { $persistentStore.write(null, CAP_KEY); } catch (e) {}
+        return bridgeReply({ code: 0, data: [] });
+    }
+
+    if (path === '/x/garb/_sg/dump') {
+        var arr = capRead();
+        return bridgeReply({ code: 0, count: arr.length, data: arr });
+    }
+
+    if (path === '/x/garb/_sg/apply-card') return doBridgeApplyCard(url);
+    if (path === '/x/garb/_sg/apply-set') return doBridgeApplySet(url);
+    if (path === '/x/garb/_sg/apply') return doBridgeApplySuit(url);
 
     bridgeReply({ code: -1, message: 'unknown bridge path' });
 }
@@ -1350,7 +1360,58 @@ function doSpoofSpaceBg() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// §8  分发
+// §8  mode=capture —— 抓一次「使用」请求，供人工分析
+// ─────────────────────────────────────────────────────────────
+
+var CAP_KEY = 'bili.garb.capture';
+var CAP_MAX = 12;
+var CAP_BODY_MAX = 4000;
+
+function capRead() {
+    try {
+        var a = JSON.parse($persistentStore.read(CAP_KEY) || '[]');
+        return Array.isArray(a) ? a : [];
+    } catch (e) { return []; }
+}
+
+function capPush(entry) {
+    var arr = capRead();
+    arr.push(entry);
+    while (arr.length > CAP_MAX) arr.shift();
+    try { $persistentStore.write(JSON.stringify(arr), CAP_KEY); } catch (e) {}
+}
+
+/** csrf 是账号令牌，落盘前抹掉，免得被贴来贴去 */
+function redactBody(b) {
+    var s = String(b || '');
+    s = s.replace(/([?&]|^)(csrf|biliCSRF)=([^&]*)/g, '$1$2=<redacted>');
+    s = s.replace(/"(csrf|biliCSRF)"\s*:\s*"[^"]*"/g, '"$1":"<redacted>"');
+    if (s.length > CAP_BODY_MAX) s = s.slice(0, CAP_BODY_MAX) + '…(' + s.length + ' bytes)';
+    return s;
+}
+
+function doCapture() {
+    // 自己的桥不抓
+    var url = (typeof $request !== 'undefined' && $request.url) ? $request.url : '';
+    if (!url || url.indexOf('/_sg/') > -1) return finish({});
+
+    var method = String((typeof $request !== 'undefined' && $request.method) || 'GET').toUpperCase();
+    // 只关心写操作 —— 穿戴/绑定/领取都走 POST
+    if (method !== 'POST' && method !== 'PUT') return finish({});
+
+    capPush({
+        t: new Date().toISOString(),
+        m: method,
+        url: url,
+        body: redactBody((typeof $request !== 'undefined' && $request.body) || '')
+    });
+
+    // 原样放行，绝不改动 App 的请求
+    finish({});
+}
+
+// ─────────────────────────────────────────────────────────────
+// §9  分发
 // ─────────────────────────────────────────────────────────────
 
 (function dispatch() {
@@ -1358,6 +1419,7 @@ function doSpoofSpaceBg() {
     try {
         if (mode === 'inject') doInject();
         else if (mode === 'bridge') doBridge();
+        else if (mode === 'capture') doCapture();
         else if (mode === 'spoof-skin') doSpoofSkin();
         else if (mode === 'spoof-card') doSpoofCard();
         else if (mode === 'spoof-space') doSpoofSpace();

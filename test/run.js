@@ -686,7 +686,71 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
     }
 
     // ─────────────────────────────────────────────────────────
-    console.log('\n[17] 未知 mode / 无 argument / 裸 token');
+    console.log('\n[18] mode=capture — 抓「使用」请求');
+    {
+        const CAPKEY = 'bili.garb.capture';
+
+        const r1 = await run({
+            argument: 'capture',
+            request: {
+                url: 'https://app.bilibili.com/x/v2/space/digital/bind',
+                method: 'POST',
+                body: 'act_id=114746&card_type_id=1792140812005&csrf=deadbeef12345678'
+            }
+        });
+        ok('POST 被记下来', (r1.store[CAPKEY] || '').indexOf('digital/bind') > -1);
+        ok('请求原样放行', r1.done && r1.done.body === undefined && r1.done.response === undefined);
+        const rec = JSON.parse(r1.store[CAPKEY])[0];
+        ok('记了 method', rec.m === 'POST');
+        ok('csrf 被抹掉', !/deadbeef/.test(rec.body), rec.body);
+        ok('抹掉后留了占位', /csrf=<redacted>/.test(rec.body));
+
+        const r2 = await run({
+            argument: 'capture',
+            request: { url: 'https://api.bilibili.com/x/garb/user/asset', method: 'GET', headers: {} }
+        });
+        ok('GET 不记', !(CAPKEY in r2.store));
+        ok('GET 也放行', r2.done && r2.done.body === undefined);
+
+        const r3 = await run({
+            argument: 'capture',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply?item_id=1', method: 'POST', body: '' }
+        });
+        ok('自己的桥不抓', !(CAPKEY in r3.store));
+
+        // 环形缓冲：超过 12 条丢掉最老的
+        let store = {};
+        for (let i = 0; i < 15; i++) {
+            const rr = await run({
+                argument: 'capture',
+                request: { url: 'https://api.bilibili.com/x/garb/test/' + i, method: 'POST', body: 'n=' + i },
+                store
+            });
+            store = rr.store;
+        }
+        const buf = JSON.parse(store[CAPKEY]);
+        ok('最多留 12 条', buf.length === 12, 'len=' + buf.length);
+        ok('留的是最新的', /test\/14/.test(buf[buf.length - 1].url));
+
+        // dump / clear
+        const rd = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/dump', method: 'GET', headers: {} },
+            store
+        });
+        const jd = JSON.parse(rd.done.response.body);
+        ok('dump 返回条数', jd.count === 12 && jd.data.length === 12);
+
+        const rc = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/dump/clear', method: 'GET', headers: {} },
+            store
+        });
+        ok('dump/clear 清空', !(CAPKEY in rc.store));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    console.log('\n[19] 未知 mode / 无 argument / 裸 token');
     {
         const r1 = await run({ argument: '', response: { headers: {}, body: '{}' } });
         ok('空 argument 放行', r1.done && r1.done.body === undefined && r1.calls === 1);

@@ -15,6 +15,12 @@ BiliGarb-Inject = type=http-response,pattern=^https?://www\.bilibili\.com/h5/mal
 # 由这段脚本落盘。返回的 JSON 必须带 CORS 头，否则页面读不到 body。
 BiliGarb-Bridge = type=http-request,pattern=^https?://api\.bilibili\.com/x/garb/_sg/,script-path=https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/bili-garb.js,script-update-interval=86400,timeout=15,argument=bridge
 
+# ── 抓包层（只在排查时用）─────────────────────────────────
+# 把装扮 / 收藏集 / 空间相关的 POST 记下来（csrf 自动抹掉），
+# 然后在 Safari 打开 https://api.bilibili.com/x/garb/_sg/dump 取回。
+# 不改动任何请求，只是旁观。正则里用 (?!_sg) 排除自己的桥，避免抢走桥接请求。
+BiliGarb-Capture = type=http-request,pattern=^https?://(api\.bilibili\.com/x/(garb/(?!_sg)|vas/dlc_act/)|app\.bilibili\.com/x/v2/space/),script-path=https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/bili-garb.js,script-update-interval=86400,timeout=10,argument=capture
+
 # ── 伪装层 ────────────────────────────────────────────────
 # App 启动时读这个接口决定主题色与加载动画。改写 user_equip 里的
 # package_url / package_md5，App 会自己去 B站 CDN 拉那套装扮的 zip 并套用。

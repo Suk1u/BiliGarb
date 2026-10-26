@@ -44,6 +44,17 @@ https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 
 **第 2 步不做，整套东西一点反应都没有。**
 
+### 3. 改完之后记得清 CDN 缓存
+
+`script-path` 指向 jsDelivr 的 `@main`，它会把文件缓存最长 12 小时。推完新版本如果 Surge 还在跑旧脚本，手动清一下：
+
+```
+https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/bili-garb.js
+https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
+```
+
+浏览器打开这两个地址，看到 `"status": "finished"` 就好了。也可以在模块里把 `script-update-interval` 调小、或者干脆改成 commit-pinned 的 `@<sha>` 地址彻底绕开缓存。
+
 ---
 
 ## 用法

@@ -633,6 +633,55 @@ function overlayMain() {
             .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
     }
 
+    function mergeLocal(dst, src) {
+        var n = 0;
+        for (var k in src) {
+            var v = src[k];
+            if (!v) continue;
+            if (!Array.isArray(v) || !v.length) continue;
+            dst[k] = dst[k] ? dst[k].concat(v) : v;
+            n++;
+        }
+        return n;
+    }
+
+    /**
+     * 13 位素材 id 只有登录态接口认（x/garb/internal/v2/mall/suit/detail），
+     * 而登录态只在页面里，所以解析必须在这边做，做完再 POST 给桥接落盘。
+     */
+    function resolveInternal(ctx) {
+        var merged = {};
+        var hitId = 0;
+        var ids = (ctx && ctx.ids) || [];
+        var i = 0;
+
+        function step() {
+            if (i >= ids.length) {
+                if (!Object.keys(merged).length) return Promise.resolve(null);
+                var pid = hitId || Number(ids[0]) || 0;
+                return Promise.resolve({
+                    set_id: ctx.set_id,
+                    name: ctx.name,
+                    item_id: pid,
+                    detail: { item_id: pid, name: ctx.name, suit_items: merged }
+                });
+            }
+            var id = ids[i++];
+            return _fetch('https://api.bilibili.com/x/garb/internal/v2/mall/suit/detail?item_id=' +
+                encodeURIComponent(id) + '&part=&from=&from_id=', { credentials: 'include' })
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    var d = j && j.code === 0 && j.data;
+                    if (d && d.suit_items) {
+                        if (mergeLocal(merged, d.suit_items) > 0 && !hitId) hitId = Number(id);
+                    }
+                    return step();
+                })
+                .catch(function () { return step(); });
+        }
+        return step();
+    }
+
     function applySet(item) {
         if (!_fetch) { toast('当前环境不支持请求'); return; }
         var act = qs('act_id');
@@ -643,7 +692,23 @@ function overlayMain() {
             '&lottery_id=' + encodeURIComponent(lot) +
             '&collect_id=' + encodeURIComponent(item.id), { credentials: 'include' })
             .then(function (r) { return r.json(); })
-            .then(function (j) { afterApply(j, item.name); })
+            .then(function (j) {
+                if (j && j.code === -2 && j.data && j.data.ids) {
+                    toast('换登录态接口重试…');
+                    return resolveInternal(j.data).then(function (res) {
+                        if (!res) { toast('这套拿不到装扮包'); render(); return; }
+                        // 不设 Content-Type，浏览器按 text/plain 发 → 简单请求，不触发预检
+                        return _fetch(SG + '/store-suit', {
+                            method: 'POST',
+                            credentials: 'include',
+                            body: JSON.stringify(res)
+                        })
+                            .then(function (r2) { return r2.json(); })
+                            .then(function (j2) { afterApply(j2, item.name); });
+                    });
+                }
+                afterApply(j, item.name);
+            })
             .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
     }
 
@@ -1057,10 +1122,18 @@ function doBridgeApplySet(url) {
                 // 文档年代 redeem_item_id 就是普通装扮 item_id，老收藏集走这条能中。
                 return searchSuitByName(hit.redeem_item_name).then(function (cands) {
                     if (!cands) {
+                        // 公开接口全部失败。13 位素材 id 只有登录态的内部接口认，
+                        // 交给页面（带 cookie）去试 internal/v2/mall/suit/detail。
                         return bridgeReply({
-                            code: -1,
-                            message: '这套是收藏集素材，' + ids.length +
-                                ' 个 id 在装扮库里都查不到，商城也搜不到同名装扮'
+                            code: -2,
+                            message: '需要登录态接口解析',
+                            data: {
+                                set_id: String(collectId),
+                                name: hitName,
+                                act_id: actId,
+                                lottery_id: lotId,
+                                ids: ids
+                            }
                         });
                     }
 
@@ -1087,8 +1160,15 @@ function doBridgeApplySet(url) {
                     return c.then(function () {
                         if (!n) {
                             return bridgeReply({
-                                code: -1,
-                                message: '搜到同名装扮但拿不到装扮包（可能已下架）'
+                                code: -2,
+                                message: '搜到同名装扮但拿不到装扮包，改走登录态接口',
+                                data: {
+                                    set_id: String(collectId),
+                                    name: hitName,
+                                    act_id: actId,
+                                    lottery_id: lotId,
+                                    ids: ids
+                                }
                             });
                         }
                         return commit(found, 1, n, 'search');
@@ -1136,6 +1216,56 @@ function doBridgeApplySet(url) {
     }
 }
 
+/**
+ * 页面把 internal/v2/mall/suit/detail 的结果 POST 过来存下。
+ * 13 位素材 id 只有登录态接口认，而登录态只在页面里，所以解析放页面做。
+ */
+function doBridgeStoreSuit() {
+    var raw = (typeof $request !== 'undefined' && $request.body) || '';
+    if (!raw) return bridgeReply({ code: -1, message: 'empty body' });
+
+    var p;
+    try { p = JSON.parse(raw); } catch (e) {
+        return bridgeReply({ code: -1, message: 'body 不是 JSON' });
+    }
+    if (!p || !p.detail || !p.detail.suit_items) {
+        return bridgeReply({ code: -1, message: '没有 suit_items' });
+    }
+
+    var keys = Object.keys(p.detail.suit_items);
+    if (!keys.length) return bridgeReply({ code: -1, message: 'suit_items 是空的' });
+
+    var name = p.name || p.detail.name || ('套装 #' + p.item_id);
+
+    writeState({
+        kind: 'suit',
+        set_id: p.set_id ? String(p.set_id) : '',
+        item_id: Number(p.item_id) || 0,
+        name: name,
+        detail: {
+            item_id: Number(p.item_id) || 0,
+            name: name,
+            suit_items: p.detail.suit_items
+        },
+        source: 'internal',
+        at: Date.now()
+    });
+
+    var sk = firstPart(p.detail.suit_items.skin);
+    bridgeReply({
+        code: 0,
+        data: {
+            kind: 'suit',
+            set_id: p.set_id ? String(p.set_id) : '',
+            item_id: Number(p.item_id) || 0,
+            name: name,
+            source: 'internal',
+            parts: keys,
+            has_skin: !!(sk && sk.properties && sk.properties.package_url)
+        }
+    });
+}
+
 function doBridge() {
     var url = (typeof $request !== 'undefined' && $request.url) ? $request.url : '';
     var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
@@ -1170,6 +1300,7 @@ function doBridge() {
         return bridgeReply({ code: 0, count: arr.length, data: arr });
     }
 
+    if (path === '/x/garb/_sg/store-suit') return doBridgeStoreSuit();
     if (path === '/x/garb/_sg/apply-card') return doBridgeApplyCard(url);
     if (path === '/x/garb/_sg/apply-set') return doBridgeApplySet(url);
     if (path === '/x/garb/_sg/apply') return doBridgeApplySuit(url);

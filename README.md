@@ -13,7 +13,7 @@
 | `BiliGarb.sgmodule` | 模块清单，七条脚本 + MITM |
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，137 条断言 |
+| `test/run.js` | 本地测试台，150 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -233,7 +233,23 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
    - `x/vas/dlc_act/*` 下 18 个接口里没有任何素材详情接口
    - `material/detail`、`collect_redeem/detail`、`act/material/list` → HTML 404
 
-   **结论：那四个 id 是服务端句柄，公开接口换不出装扮包。这套不先兑换就穿不上，不是方法没找到。**
+   **但最后找到了另一条路。** 那个 13 位 id 不是「不存在」，是**只有登录态接口认**。
+
+   H5 页面自己用的根本不是公开的 `v2/mall/suit/detail`，而是：
+
+   ```
+   GET x/garb/internal/v2/mall/suit/detail?item_id=&part=&from=&from_id=
+   ```
+
+   这个接口在 `mall-h5-major` bundle 里的调用点写得很清楚（`item_id / part / from / from_id` 四个参数）。裸调一律 `-101 账号未登录` —— 而登录态只在页面里有。
+
+   所以模块的处理顺序变成：
+
+   1. 公开 `suit/detail` 逐个查素材 id，能出装扮包的合并
+   2. 不行就按兑换物名字搜同名装扮
+   3. 还不行，桥接返回 `code:-2` 把 id 列表交给页面；**页面用 `credentials:'include'` 去打 `internal/v2/mall/suit/detail`**，解析出来再 POST 回 `/store-suit` 落盘
+
+   第 3 步能成的前提是：那个 13 位 id 确实是某个装扮的 `item_id`。数据库里的证据支持这一点 —— `skin` 表里就有 `1716959545001`（`星空列车与白的旅行收藏集`，`part_id=9`）这种 13 位顶层条目。
 
 6. **不是每套装扮都有主题部件。** 有 `suit_items.skin` 的才能换主题色和图标；只有 `loading` 的只能换加载动画；`part_id=9` 的纯主题套装反而没有卡片背景。
 
@@ -253,13 +269,14 @@ WBI、`appkey`+`sign`、`access_key` —— 一个都不用。我们只改写 Ap
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 137 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 150 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行
 - 桥接 apply / apply-card / apply-set / clear / state / 缺参 / detail 失败 / 卡不在池子里
 - `lottery_id` 缺失时自动走 `act/basic/v2` 解析
-- 兑换物的四个 id 全查不到 → 按名字回落搜索；搜到就应用，搜不到才明确失败且不落盘
+- 兑换物的四个 id 全查不到 → 按名字回落搜索；再不行返回 `-2` 把 id 交给页面
+- `/store-suit`：页面回传登录态解析结果后落盘，坏 body / 空 suit_items 一律拒
 - 有一个能解析 → 合并成功并记下 `set_id`；搜索参数必须是 `key_word`
 - 伪装层的字段替换、无状态放行、坏 JSON 不炸、只改自己的名片
 - 空间背景的顶层命中、嵌套命中、四种该放行的场景

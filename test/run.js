@@ -302,8 +302,9 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         const j1 = JSON.parse(r1.done.response.body);
-        ok('全查不到时返回 -1', j1.code === -1, JSON.stringify(j1).slice(0, 160));
-        ok('错误信息说清楚了', /素材|装扮包/.test(j1.message), j1.message);
+        ok('全查不到时返回 -2（交给页面走登录态接口）', j1.code === -2, JSON.stringify(j1).slice(0, 160));
+        ok('回包里带上了素材 id 列表', !!(j1.data && j1.data.ids && j1.data.ids.length === 4));
+        ok('回包里带上 collect_id 和名字', !!(j1.data && String(j1.data.set_id) === String(themeSet.collect_id) && j1.data.name));
         ok('全查不到时不落盘', !(KEY in r1.store));
         ok('四个 id 各试了一次', r1.requests.filter(x => x.url.includes('suit/detail')).length === 4);
 
@@ -372,7 +373,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         ok('缺 lottery_id 时自动解析', r3.requests[0].url.includes('act/basic/v2'));
-        ok('解析后仍走完整流程', JSON.parse(r3.done.response.body).code === -1);
+        ok('解析后仍走完整流程', JSON.parse(r3.done.response.body).code === -2);
     }
 
     console.log('\n[9c] mode=bridge — apply-set 按名字回落搜索');
@@ -434,8 +435,53 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         const j2 = JSON.parse(r2.done.response.body);
-        ok('搜到同名但没包 → -1 且说明原因', j2.code === -1 && /下架|拿不到装扮包/.test(j2.message), j2.message);
+        ok('搜到同名但没包 → 也转 -2', j2.code === -2 && !!(j2.data && j2.data.ids), j2.message);
         ok('失败不落盘', !(KEY in r2.store));
+    }
+
+    console.log('\n[9d] mode=bridge — store-suit（页面回传登录态解析结果）');
+    {
+        const payload = {
+            set_id: '114749',
+            name: '水果篮子个性主题',
+            item_id: 36437,
+            detail: { item_id: 36437, name: '水果篮子个性主题', suit_items: DETAIL.data.suit_items }
+        };
+        const r = await run({
+            argument: 'mode=bridge',
+            request: {
+                url: 'https://api.bilibili.com/x/garb/_sg/store-suit',
+                method: 'POST',
+                body: JSON.stringify(payload)
+            }
+        });
+        const j = JSON.parse(r.done.response.body);
+        ok('返回 code 0', j.code === 0, JSON.stringify(j).slice(0, 160));
+        ok('标了 source=internal', j.data && j.data.source === 'internal');
+        ok('认出了主题包', j.data && j.data.has_skin === true);
+        ok('列出了部件', j.data && j.data.parts.length >= 8);
+
+        const st = JSON.parse(r.store[KEY]);
+        ok('落盘 kind=suit', st.kind === 'suit');
+        ok('落盘 set_id', st.set_id === '114749');
+        ok('落盘 detail 带 suit_items', !!st.detail.suit_items.skin);
+        ok('$done 只调用一次', r.calls === 1);
+
+        // 空 body / 坏 JSON / 没有 suit_items
+        const bad = [
+            ['空 body', ''],
+            ['坏 JSON', 'not json{'],
+            ['没有 suit_items', JSON.stringify({ set_id: '1', item_id: 1, detail: {} })],
+            ['suit_items 是空的', JSON.stringify({ set_id: '1', item_id: 1, detail: { suit_items: {} } })]
+        ];
+        for (const [label, body] of bad) {
+            const rb = await run({
+                argument: 'mode=bridge',
+                request: { url: 'https://api.bilibili.com/x/garb/_sg/store-suit', method: 'POST', body }
+            });
+            ok(label + ' → -1 且不落盘',
+                JSON.parse(rb.done.response.body).code === -1 && !(KEY in rb.store));
+        }
     }
 
     // ─────────────────────────────────────────────────────────

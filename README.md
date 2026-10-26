@@ -29,10 +29,12 @@
 Surge → 首页 → 模块 → 右上角 `+` → 从 URL 导入，填：
 
 ```
-https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
+https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 ```
 
-模块里的 `script-path` 已经指向 jsDelivr 上的脚本，不需要手动放任何文件。
+模块里的 `script-path` 已经指向同一个 CDN 上的脚本，不需要手动放任何文件。
+
+> 为什么用 `gcore` 而不是 `cdn`：`cdn.jsdelivr.net` 的 `@main` 别名缓存刷新很慢，实测推完新版本半小时还是旧文件，而 purge 接口会限流（`"throttled": true`）。`gcore` / `testingcf` 这两个边缘实测是即时的。三个域名指向同一份文件，哪个先更新用哪个。
 
 想改成跟仓库同步开发，也可以把 `bili-garb.js` 和 `BiliGarb.sgmodule` 放进 Surge 配置目录，再把每条 `script-path` 换成本地相对路径 `bili-garb.js`。
 
@@ -47,14 +49,16 @@ https://cdn.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 
 ### 3. 改完之后记得清 CDN 缓存
 
-`script-path` 指向 jsDelivr 的 `@main`，它会把文件缓存最长 12 小时。推完新版本如果 Surge 还在跑旧脚本，手动清一下：
+`script-path` 指向 jsDelivr 的 `@main`，它有缓存。推完新版本如果 Surge 还在跑旧脚本，手动清一下：
 
 ```
 https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/bili-garb.js
 https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 ```
 
-浏览器打开这两个地址，看到 `"status": "finished"` 就好了。也可以在模块里把 `script-update-interval` 调小、或者干脆改成 commit-pinned 的 `@<sha>` 地址彻底绕开缓存。
+浏览器打开这两个地址，看到 `"status": "finished"` 就好了。**注意 purge 有频率限制**，连打几次会返回 `"throttled": true`，那就等十分钟再来。清完回读一下体积，和本地文件对得上才算生效。
+
+实在急，就把模块里的域名换成另一个边缘（`gcore` / `testingcf` / `fastly` / `cdn`），同一份文件、不同的缓存，哪个先更新用哪个。
 
 ---
 

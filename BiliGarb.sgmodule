@@ -1,0 +1,30 @@
+#!name=B站装扮注入器
+#!desc=在 B站「装扮」页面注入一个悬浮按钮，点开自动列出本页装扮，选中即可本地应用。打开 B站 → 我的 → 装扮，右下角粉色按钮。
+#!system=ios
+#!author=RNA
+
+[Script]
+# ── 注入层 ────────────────────────────────────────────────
+# 在装扮 H5 外壳 HTML 的 </head> 前插入悬浮按钮与选择器。
+# 注入点必须在 head 里 —— 该页所有 bundle 的 script 标签都堆在 </body> 之前，
+# 放在 head 才能抢在 App 业务代码之前 hook 住 fetch / XHR。
+BiliGarb-Inject = type=http-response,pattern=^https?://www\.bilibili\.com/h5/mall/,requires-body=true,max-size=1048576,script-path=bili-garb.js,timeout=10,argument=inject
+
+# ── 桥接层 ────────────────────────────────────────────────
+# 页面里的按钮不碰 Surge 存储，而是 GET 一个魔法 URL，
+# 由这段脚本落盘。返回的 JSON 必须带 CORS 头，否则页面读不到 body。
+BiliGarb-Bridge = type=http-request,pattern=^https?://api\.bilibili\.com/x/garb/_sg/,script-path=bili-garb.js,timeout=15,argument=bridge
+
+# ── 伪装层 ────────────────────────────────────────────────
+# App 启动时读这个接口决定主题色与加载动画。改写 user_equip 里的
+# package_url / package_md5，App 会自己去 B站 CDN 拉那套装扮的 zip 并套用。
+BiliGarb-Skin = type=http-response,pattern=^https?://app\.bilibili\.com/x/resource/show/skin,requires-body=true,max-size=262144,script-path=bili-garb.js,timeout=10,argument=spoof-skin
+
+# 名片：挂件 + 名字颜色。只改自己（按 Cookie 里的 DedeUserID 判断）。
+BiliGarb-Card = type=http-response,pattern=^https?://api\.bilibili\.com/x/web-interface/card,requires-body=true,max-size=262144,script-path=bili-garb.js,timeout=10,argument=spoof-card
+
+# 空间页：按名覆盖 pendant / nickname_color，认不出的键原样放过。
+BiliGarb-Space = type=http-response,pattern=^https?://(api|app)\.bilibili\.com/x/(space|v2/space),requires-body=true,max-size=524288,script-path=bili-garb.js,timeout=10,argument=spoof-space
+
+[MITM]
+hostname = %APPEND% www.bilibili.com, api.bilibili.com, app.bilibili.com

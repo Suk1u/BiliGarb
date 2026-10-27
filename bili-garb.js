@@ -1084,16 +1084,27 @@ function overlayMain() {
         placeFab(saved.x, saved.y);
     }
 
+    // 拖动诊断计数：点一下按钮，toast 会报出收到多少事件（定位完就删）
+    var dbg = { down: 0, move: 0, up: 0 };
+
     function makeDraggable(node) {
         var dragging = false, moved = false, isTouch = false;
         var startX = 0, startY = 0, baseX = 0, baseY = 0, startT = 0;
+        var bound = false;
+
+        var OPT = { capture: true, passive: false };
 
         function pt(ev) {
             var t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
             return { x: t.clientX, y: t.clientY };
         }
 
+        function onNode(ev) {
+            return node === ev.target || node.contains(ev.target);
+        }
+
         function down(ev) {
+            if (!onNode(ev)) return;
             var p = pt(ev);
             var r = node.getBoundingClientRect();
             startX = p.x; startY = p.y;
@@ -1102,18 +1113,40 @@ function overlayMain() {
             moved = false;
             startT = Date.now();
             isTouch = !!(ev.touches && ev.touches.length);
+            dbg.down++;
 
-            // 关键：这里必须拦住。iOS WebView 一旦接管滚动手势就不再派发
-            // touchmove，拖动逻辑会整个失联。touchstart 的 passive 必须是 false。
+            // 只在自己身上按住时才挂 move/end —— 平时不挂，页面滚动不受影响。
+            // 挂在 window 捕获阶段：元素级监听在部分 WebView 里会被原生手势层吃掉。
+            if (!bound) {
+                bound = true;
+                window.addEventListener('touchmove', move, OPT);
+                window.addEventListener('touchend', up, OPT);
+                window.addEventListener('touchcancel', up, OPT);
+                window.addEventListener('mousemove', move, OPT);
+                window.addEventListener('mouseup', up, OPT);
+            }
+
+            // 拦住 WebView 的滚动手势，否则后面收不到 touchmove
             if (ev.cancelable) ev.preventDefault();
+        }
+
+        function unbind() {
+            if (!bound) return;
+            bound = false;
+            window.removeEventListener('touchmove', move, OPT);
+            window.removeEventListener('touchend', up, OPT);
+            window.removeEventListener('touchcancel', up, OPT);
+            window.removeEventListener('mousemove', move, OPT);
+            window.removeEventListener('mouseup', up, OPT);
         }
 
         function move(ev) {
             if (!dragging) return;
             var p = pt(ev);
             var dx = p.x - startX, dy = p.y - startY;
-            if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) moved = true;
+            if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) moved = true;
             if (!moved) return;
+            dbg.move++;
             placeFab(baseX + dx, baseY + dy);
             if (ev.cancelable) ev.preventDefault();
         }
@@ -1121,20 +1154,21 @@ function overlayMain() {
         function up(ev) {
             if (!dragging) return;
             dragging = false;
+            dbg.up++;
+            unbind();
             var dt = Date.now() - startT;
 
             if (!moved) {
-                // 没位移 —— 当点击处理。touchstart / mousedown 里都 preventDefault 了，
-                // 合成 click 不会再来，所以这里自己开抽屉（触屏和鼠标都一样）。
+                // 没位移 → 当点击。preventDefault 吃掉了合成 click，所以自己开。
                 if (dt < 700) {
                     suppressClick = true;
                     setTimeout(function () { suppressClick = false; }, 320);
+                    toast('拖动诊断：start ' + dbg.down + ' / move ' + dbg.move + ' / end ' + dbg.up);
                     openSheet();
                 }
                 return;
             }
 
-            // 吸到最近的一侧
             var w = window.innerWidth || 375;
             var left = parseFloat(node.style.left);
             if (isNaN(left)) left = baseX;
@@ -1148,19 +1182,9 @@ function overlayMain() {
             if (ev && ev.cancelable) ev.preventDefault();
         }
 
-        // touchstart / touchmove 都必须是 passive:false，否则拦不住
-        node.addEventListener('touchstart', down, { passive: false });
-        node.addEventListener('touchmove', move, { passive: false });
-        node.addEventListener('touchend', up, { passive: false });
-        node.addEventListener('touchcancel', up, { passive: false });
-
-        // 桌面
-        node.addEventListener('mousedown', function (ev) {
-            down(ev);
-            ev.preventDefault();
-        });
-        window.addEventListener('mousemove', move);
-        window.addEventListener('mouseup', up);
+        // touchstart 常驻（捕获），move/end 按需挂
+        window.addEventListener('touchstart', down, OPT);
+        window.addEventListener('mousedown', down, OPT);
 
         window.addEventListener('resize', function () {
             var l = parseFloat(node.style.left);

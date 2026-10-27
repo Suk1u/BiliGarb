@@ -111,12 +111,16 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('注入段内无嵌套 </script>', code.indexOf('</script>') === -1);
 
         // 悬浮按钮拖动
-        ok('挂了 touchstart 拖动', code.indexOf("addEventListener('touchstart', down") > -1);
-        ok('touchstart 是 passive:false（否则拦不住 WebView 滚动）',
-            code.indexOf("addEventListener('touchstart', down, { passive: false })") > -1);
+        ok('touchstart 挂在 window 捕获阶段',
+            code.indexOf("window.addEventListener('touchstart', down, OPT)") > -1);
+        ok('捕获选项是 capture + passive:false',
+            code.indexOf("var OPT = { capture: true, passive: false };") > -1);
         ok('touchstart 里调了 preventDefault', code.indexOf('if (ev.cancelable) ev.preventDefault();') > -1);
-        ok('touchmove 不是 passive（要能 preventDefault）',
-            code.indexOf("addEventListener('touchmove', move, { passive: false })") > -1);
+        ok('带了事件计数（诊断用）', code.indexOf('dbg.down++') > -1 && code.indexOf('dbg.move++') > -1);
+        ok('move/end 按需挂载，平时不拖累滚动', code.indexOf('function unbind()') > -1);
+        ok('touchstart 常驻捕获', code.indexOf("window.addEventListener('touchstart', down, OPT)") > -1);
+        ok('touchmove 也挂在捕获阶段',
+            code.indexOf("window.addEventListener('touchmove', move, OPT)") > -1);
         ok('拖完抑制一次 click', code.indexOf('suppressClick') > -1);
         ok('位置写 localStorage', code.indexOf("'bili.garb.fabpos'") > -1);
         ok('挂载时恢复位置', code.indexOf('restoreFab()') > -1);

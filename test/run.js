@@ -106,8 +106,11 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             r.children.join(','));
 
         // 拖动接线（照 Bili-skin 的做法）
-        ok('touchstart 挂在元素上、passive:true',
-            code.indexOf("node.addEventListener('touchstart', fabDown, { passive: true })") > -1);
+        ok('touchstart 挂在元素上、passive:false（要拦住滚动接管）',
+            code.indexOf("node.addEventListener('touchstart', fabDown, { passive: false })") > -1);
+        ok('touchstart 里就 preventDefault', /fabDown[\s\S]{0,600}?e\.cancelable\) e\.preventDefault\(\)/.test(code));
+        ok('抽屉标题带构建号（区分两个页面跑的是不是同一份脚本）',
+            code.indexOf('bg-build') > -1 && code.indexOf("var BUILD = '") > -1);
         ok('touchmove 是 passive:false（要能 preventDefault）',
             code.indexOf("node.addEventListener('touchmove', fabMove, { passive: false })") > -1);
         ok('按下时把 right/bottom 换成 left/top',

@@ -739,6 +739,7 @@ function overlayMain() {
         '.bg-hd{display:flex;align-items:center;justify-content:space-between;',
         'padding:16px 18px 10px;flex:0 0 auto}',
         '.bg-title{font-size:16px;font-weight:600;letter-spacing:.2px}',
+        '.bg-build{font-size:10px;color:#9499a0;letter-spacing:.4px;margin-top:1px}',
         '.bg-close{width:28px;height:28px;border:none;background:transparent;color:#9499a0;',
         'font-size:22px;line-height:1;padding:0;cursor:pointer}',
 
@@ -842,6 +843,9 @@ function overlayMain() {
     };
 
     // 和桥接层的 SLOTS / SLOT_LABEL 保持一致
+    // 构建标记：抽屉标题上会显示，用来确认两个页面跑的是不是同一份脚本
+    var BUILD = 'v4';
+
     var SLOT_ORDER = ['skin', 'loading', 'pendant', 'spacebg', 'playicon'];
     var SLOT_LABEL = {
         skin: '主题', loading: '加载动画', pendant: '头像挂件',
@@ -1100,6 +1104,7 @@ function overlayMain() {
         fabDrag.sy = t.clientY;
         fabDrag.ox = r.left;
         fabDrag.oy = r.top;
+        if (e.cancelable) e.preventDefault();
         // 从 right/bottom 锚定切到 left/top，后面才好直接加减位移
         fab.style.left = r.left + 'px';
         fab.style.top = r.top + 'px';
@@ -1140,7 +1145,10 @@ function overlayMain() {
     }
 
     function bindFabDrag(node) {
-        node.addEventListener('touchstart', fabDown, { passive: true });
+        // passive 必须是 false：卡池页那种带嵌套滚动容器的页面，
+        // 一旦让 WebView 接管滚动手势就不再派发 touchmove，拖动直接失联。
+        // 因为在这里 preventDefault 了，合成 click 不会再来，点击由 fabUp 自己判。
+        node.addEventListener('touchstart', fabDown, { passive: false });
         node.addEventListener('touchmove', fabMove, { passive: false });
         node.addEventListener('touchend', fabUp);
         node.addEventListener('mousedown', fabDown);
@@ -1189,7 +1197,10 @@ function overlayMain() {
         sheet = el('div', 'bg-sheet');
 
         var hd = el('div', 'bg-hd');
-        hd.appendChild(el('div', 'bg-title', '装扮注入器'));
+        var titleWrap = el('div', 'bg-titlewrap');
+        titleWrap.appendChild(el('div', 'bg-title', '装扮注入器'));
+        titleWrap.appendChild(el('div', 'bg-build', BUILD));
+        hd.appendChild(titleWrap);
         var closeBtn = el('button', 'bg-close', '×');
         closeBtn.addEventListener('click', closeSheet);
         hd.appendChild(closeBtn);

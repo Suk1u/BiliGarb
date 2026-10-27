@@ -1206,6 +1206,90 @@ function overlayMain() {
         });
     }
 
+    // ── 应用动作 ────────────────────────────────────────────
+    // 13:19 那次重写把这一组弄丢了，导致 mount() 里 rs.addEventListener('click', reset)
+    // 抛 ReferenceError，整个挂载流程中断 —— 按钮根本不出现。
+    function afterApply(j, fallbackName) {
+        if (j && j.code === 0) {
+            toast('已应用：' + fallbackName + '　重开 B站 生效');
+            return loadState().then(render, render);
+        }
+        toast('失败：' + ((j && j.message) || '未知错误'));
+        render();
+    }
+
+    function applyPart(item, slot) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply-part?item_id=' + encodeURIComponent(item.id) +
+            '&slot=' + encodeURIComponent(slot), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j && j.code === 0 && j.data) {
+                    afterApply(j, (j.data.label || SLOT_LABEL[slot] || slot) + ' · ' + item.name);
+                } else {
+                    toast('失败：' + ((j && j.message) || '未知错误'));
+                }
+            })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); });
+    }
+
+    function applySuit(item) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply?item_id=' + encodeURIComponent(item.id), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { afterApply(j, item.name); })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
+    }
+
+    function applyCard(item) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        var act = qs('act_id');
+        var lot = qs('lottery_id');
+        if (!act) { toast('拿不到 act_id，请在收藏集页面内操作'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply-card?act_id=' + encodeURIComponent(act) +
+            '&lottery_id=' + encodeURIComponent(lot) +
+            '&card_type_id=' + encodeURIComponent(item.id), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) { afterApply(j, item.name); })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
+    }
+
+    function applySet(item) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        var act = qs('act_id');
+        var lot = qs('lottery_id');
+        if (!act) { toast('拿不到 act_id，请在收藏集页面内操作'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply-set?act_id=' + encodeURIComponent(act) +
+            '&lottery_id=' + encodeURIComponent(lot) +
+            '&collect_id=' + encodeURIComponent(item.id), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j && j.code === -3) {
+                    toast('需要 access_key —— 用 Safari 打开 /x/garb/_sg/set-token?access_key=你的令牌');
+                    return;
+                }
+                afterApply(j, item.name);
+            })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); render(); });
+    }
+
+    function reset() {
+        if (!_fetch) return;
+        _fetch(SG + '/clear', { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                state = null;
+                applied = false;
+                toast('已还原为真实装扮');
+                render();
+            })
+            .catch(function () { toast('还原失败'); });
+    }
+
     function mount() {
         if (document.getElementById('bg-root')) return;
 
@@ -1288,7 +1372,7 @@ function overlayMain() {
         loadCurrent();
         loadState().then(renderStatus, function () { });
 
-        ['pushState', 'replaceState'].forEach(function (k) {
+        if (typeof history !== 'undefined' && history) ['pushState', 'replaceState'].forEach(function (k) {
             var orig = history[k];
             if (typeof orig !== 'function') return;
             history[k] = function () {

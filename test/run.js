@@ -87,6 +87,26 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
 (async function main() {
 
     // ─────────────────────────────────────────────────────────
+    console.log('\n[0] overlay 能在假 DOM 里挂载（按钮真的会出来）');
+    {
+        const { runOverlay } = require('./dom.js');
+        const boot = await run({ argument: 'noop' });
+        const r = runOverlay(boot.ctx.OVERLAY_JS);
+
+        ok('overlay 执行不抛错', r.error === null,
+            r.error ? r.error.message : '');
+        ok('延迟回调里也不抛错', r.deferredErrors.length === 0, r.deferredErrors.join(' | '));
+        ok('bg-root 挂到了 body 上', !!r.root && r.bodyChildren.indexOf('bg-root') > -1);
+        ok('四个子节点齐全（mask/sheet/fab/toast）',
+            r.children.length === 4 &&
+            r.children.some(c => c.indexOf('bg-mask') > -1) &&
+            r.children.some(c => c.indexOf('bg-sheet') > -1) &&
+            r.children.some(c => c.indexOf('bg-fab') > -1) &&
+            r.children.some(c => c.indexOf('bg-toast') > -1),
+            r.children.join(','));
+    }
+
+    // ─────────────────────────────────────────────────────────
     console.log('\n[1] mode=inject — 注入装扮页外壳');
     {
         const r = await run({

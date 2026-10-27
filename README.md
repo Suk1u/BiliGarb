@@ -14,7 +14,7 @@
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `../docs/bili-garb-coverage.md` | 装扮覆盖情况：哪些做了、哪些做不了、为什么 |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，257 条断言 |
+| `test/run.js` | 本地测试台，261 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -402,7 +402,7 @@ https://api.bilibili.com/x/garb/_sg/set-equip?json=<URL 编码后的整份 JSON>
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 257 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 261 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

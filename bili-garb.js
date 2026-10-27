@@ -1502,6 +1502,9 @@ function doSpoofSkin() {
         var hit = false;
         if (any.user_equip) { body.data.user_equip = any.user_equip; hit = true; }
         if (any.load_equip) { body.data.load_equip = any.load_equip; hit = true; }
+        // 进度条（播放器里的拖动条）。show/skin 未必有这个键，
+        // 但 ObjC 的 JSON 模型会忽略未知键，多塞一个不会出事。
+        if (any.play_icon) { body.data.play_icon = any.play_icon; hit = true; }
         if (!hit) return finish({});
         return finish({ body: JSON.stringify(body) });
     }

@@ -652,6 +652,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('package_url 是资源包那个', /abc\.zip$/.test(j3.data.user_equip.package_url));
         ok('主题色跟着换了', j3.data.user_equip.data.color === '#000000');
         ok('load_equip 也换了', j3.data.load_equip.id === 1780036045001);
+        ok('play_icon 也塞进去了', !!(j3.data.play_icon && j3.data.play_icon.middle_png));
         ok('skin_colors 原样保留', j3.data.skin_colors.length === 1);
     }
 

@@ -8,4 +8,4 @@
 # 按钮文案改成「领取」）。服务端该拒还是拒，不会真的发放任何东西。
 # 用途：收藏集奖励没达到条件时按钮是「进行中0/4」点不动，走不到素材预览页，
 # 也就抓不到那个解析素材 id 的请求。开着它点进去，用主模块的抓包看请求。
-BiliGarb-FakeUnlock = type=http-response,pattern=^https?://api\.bilibili\.com/x/vas/dlc_act/(lottery/collect_list|lottery_home_detail),requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@26c5f6d/bili-garb.js,timeout=10,argument=fake-unlock
+BiliGarb-FakeUnlock = type=http-response,pattern=^https?://api\.bilibili\.com/x/vas/dlc_act/(lottery/collect_list|lottery_home_detail),requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@7b83845/bili-garb.js,timeout=10,argument=fake-unlock

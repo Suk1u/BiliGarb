@@ -39,5 +39,24 @@ BiliGarb-Space = type=http-response,pattern=^https?://(api|app)\.bilibili\.com/x
 # （www.bilibili.com/h5/mall/digital-card/*），同一个按钮在那里也能用。
 BiliGarb-SpaceBg = type=http-response,pattern=^https?://api\.bilibili\.com/x/garb/Right/SpaceBackgroundInfo,requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@26c5f6d/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-spacebg
 
+# ── 评论区 ────────────────────────────────────────────────
+# 评论装扮。二进制里的键路径表：dressCard → member.user_sailing_v2.card_bg、
+# member.user_sailing.pendant。只改自己（按 member.mid 比对 Cookie 的 DedeUserID）。
+# 注意：App 的评论列表主通道是 gRPC（bilibili.main.community.reply.v1），
+# 这一条只覆盖走 HTTP JSON 的页面（H5 评论区等）。原生评论列表见下面第 10 条。
+BiliGarb-Reply = type=http-response,pattern=^https?://api\.bilibili\.com/x/v2/reply,requires-body=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@26c5f6d/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-reply
+
+# 原生评论列表（gRPC）。字段号是从 IPA 里读出来的，不是猜的：
+#   MainListReply.replies=2 → ReplyInfo.memberV2=15 → MemberV2.userSailing=9
+#   → UserSailing.cardBg=2 / cardBgWithFocus=3 → UserCardBG.image=3
+# binary-body-mode=true 让 body 以 Uint8Array 进出，脚本才能改 protobuf。
+# pattern 只圈评论服务，别的 gRPC 流量一个字节都不碰。
+BiliGarb-Grpc = type=http-response,pattern=^https?://grpc\.biliapi\.net/bilibili\.main\.community\.reply\.v1,requires-body=true,binary-body-mode=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@26c5f6d/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-grpc
+
+# ── 开屏 ──────────────────────────────────────────────────
+# 品牌开屏（BFCBrandSplashListModel）和活动开屏（BFCEventSplashModel）一起接管。
+# 图片地址和 md5 都从收藏集卡片的 splash.resource 来，不自己算摘要。
+BiliGarb-Splash = type=http-response,pattern=^https?://(app|api)\.bilibili\.com/x/v2/splash/,requires-body=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@26c5f6d/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-splash
+
 [MITM]
-hostname = %APPEND% www.bilibili.com, api.bilibili.com, app.bilibili.com
+hostname = %APPEND% www.bilibili.com, api.bilibili.com, app.bilibili.com, grpc.biliapi.net

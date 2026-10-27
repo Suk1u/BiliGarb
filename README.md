@@ -14,7 +14,7 @@
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `../docs/bili-garb-coverage.md` | 装扮覆盖情况：哪些做了、哪些做不了、为什么 |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，223 条断言 |
+| `test/run.js` | 本地测试台，251 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -89,10 +89,10 @@ https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 
 ### 混搭
 
-装扮行上还有一个小按钮「**部件**」。点开它会展开五个槽位：
+装扮行上还有一个小按钮「**部件**」。点开它会展开七个槽位：
 
 ```
-主题   加载动画   头像挂件   空间背景   进度条
+主题   加载动画   头像挂件   空间背景   进度条   评论装扮   开屏
 ```
 
 点其中一个，**只换那一个槽位**，其他槽位原样保留。所以可以：
@@ -102,6 +102,29 @@ https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 - 资源包灌进来的主题 + 套装自带的挂件
 
 状态栏会显示「已应用 N 个部件」以及每个槽位现在是哪套。收藏集卡片只填空间背景槽，不会顶掉其他部件。
+
+**评论装扮**和**开屏**是两个自动槽：应用一套装扮时，如果这套的 `suit_items.card_bg`
+有内容，评论装扮槽自动填上；应用一张收藏集卡片时，如果卡片的
+`card_type_info.splash` 有内容，开屏槽自动填上。不用单独点。
+
+- 评论装扮 → 改写 `x/v2/reply*`，自己的楼层写
+  `member.user_sailing_v2.card_bg` + `member.user_sailing.pendant`。
+  按 `member.mid` 比对 Cookie 里的 `DedeUserID`，别人的楼层一个字节都不动。
+- 开屏 → 改写 `x/v2/splash/*`，按 `thumb` + `thumb_hash` 结构签名替换图片位；
+  品牌开屏列表为空时自己补一条 `splash_id=bili-garb` 并塞进 `show[]`。
+
+⚠️ App 原生评论列表走的是 `grpc.biliapi.net` 上的
+`bilibili.main.community.reply.v1` —— **这条也接管了**（`mode=spoof-grpc`，
+`binary-body-mode=true` 直接改 protobuf）。字段号是从 IPA 里读出来的：
+
+```
+MainListReply.replies=2 → ReplyInfo.memberV2=15 → MemberV2.userSailing=9
+→ UserSailing.cardBg=2 / cardBgWithFocus=3 → UserCardBG.image=3
+```
+
+所以 `spoof-reply`（HTTP JSON）和 `spoof-grpc`（protobuf）两条路都在，
+H5 评论区和 App 原生评论区都能生效。字段号的取证过程见
+`../docs/bili-9.1.2-能力边界.md`。
 
 ---
 
@@ -305,7 +328,10 @@ https://api.bilibili.com/x/garb/_sg/set-equip?json=<URL 编码后的整份 JSON>
 
 3. **没有真实穿戴接口。** `/x/garb/user/suit/equip`、`/v2/.../equip`、`/user/suit/dress` 我逐个实测过，全是 HTML 404。H5 那个「佩戴成功」是 `callNative` 之后的前端提示，真穿装在原生层。所以这是伪装，不是破解。
 
-4. **收藏集只能换空间背景。** 卡片的其他几张脸（名片、开屏、评论背景）在外部找不到可验证的读取接口，所以没做 —— 宁可少做，不做瞎猜。`SpaceBackgroundInfo` 的响应结构也没法验证，用的是结构匹配，真机上不生效就把那次的响应抓给我。
+4. **收藏集：空间背景和开屏都能换，评论背景不能。** 卡片的 `space_background` 和
+   `splash.resource` 都是成对给图 + 哈希的，直接搬就能用。评论背景卡片上根本没有这个字段
+   —— 评论背景只能从**装扮**的 `suit_items.card_bg` 来。`SpaceBackgroundInfo` 的响应结构
+   没法在外部验证，用的是结构匹配，真机上不生效就把那次的响应抓给我。
 
 5. **收藏集的主题套装：能列出来，能不能穿上取决于这套是哪个年代的。**
 
@@ -374,7 +400,7 @@ https://api.bilibili.com/x/garb/_sg/set-equip?json=<URL 编码后的整份 JSON>
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 223 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 251 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

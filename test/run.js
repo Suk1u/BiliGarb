@@ -109,6 +109,15 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('注入的 overlay 代码语法合法', parses);
         ok('overlay 内容未被提前截断', code.length > 15000 && /overlayMain/.test(code));
         ok('注入段内无嵌套 </script>', code.indexOf('</script>') === -1);
+
+        // 悬浮按钮拖动
+        ok('挂了 touchstart 拖动', code.indexOf("addEventListener('touchstart', down") > -1);
+        ok('touchmove 不是 passive（要能 preventDefault）',
+            code.indexOf("addEventListener('touchmove', move, { passive: false })") > -1);
+        ok('拖完抑制一次 click', code.indexOf('suppressClick') > -1);
+        ok('位置写 localStorage', code.indexOf("'bili.garb.fabpos'") > -1);
+        ok('挂载时恢复位置', code.indexOf('restoreFab()') > -1);
+        ok('吸边逻辑在', code.indexOf('targetX') > -1);
     }
 
     console.log('\n[2] mode=inject — 收藏集页面外壳同样能注入');

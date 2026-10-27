@@ -722,6 +722,7 @@ function overlayMain() {
         'box-shadow:0 6px 20px rgba(251,114,153,.42);z-index:2147483646;',
         'transition:transform .15s ease,box-shadow .15s ease;-webkit-tap-highlight-color:transparent}',
         '.bg-fab:active{transform:scale(.92);box-shadow:0 3px 10px rgba(251,114,153,.36)}',
+        '.bg-fab{touch-action:none;user-select:none;-webkit-user-select:none}',
 
         '.bg-mask{position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,.46);',
         'z-index:2147483647;opacity:0;pointer-events:none;transition:opacity .2s ease}',
@@ -997,6 +998,110 @@ function overlayMain() {
         sheet.classList.remove('on');
     }
 
+    // ── 悬浮按钮拖动 ────────────────────────────────────────
+    var FAB_SIZE = 52;
+    var FAB_KEY = 'bili.garb.fabpos';
+    var suppressClick = false;
+
+    function clampFab(x, y) {
+        var w = window.innerWidth || 375;
+        var h = window.innerHeight || 667;
+        return {
+            x: Math.max(8, Math.min(w - FAB_SIZE - 8, x)),
+            y: Math.max(8, Math.min(h - FAB_SIZE - 8, y))
+        };
+    }
+
+    function placeFab(x, y) {
+        var p = clampFab(x, y);
+        fab.style.left = p.x + 'px';
+        fab.style.top = p.y + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+        return p;
+    }
+
+    function saveFab(x, y) {
+        try { localStorage.setItem(FAB_KEY, JSON.stringify({ x: Math.round(x), y: Math.round(y) })); } catch (e) { }
+    }
+
+    function restoreFab() {
+        var saved = null;
+        try {
+            var raw = localStorage.getItem(FAB_KEY);
+            if (raw) saved = JSON.parse(raw);
+        } catch (e) { saved = null; }
+        if (!saved || typeof saved.x !== 'number') return;
+        placeFab(saved.x, saved.y);
+    }
+
+    function makeDraggable(node) {
+        var dragging = false, moved = false;
+        var startX = 0, startY = 0, baseX = 0, baseY = 0;
+
+        function pt(ev) {
+            var t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
+            return { x: t.clientX, y: t.clientY };
+        }
+
+        function down(ev) {
+            var p = pt(ev);
+            var r = node.getBoundingClientRect();
+            startX = p.x; startY = p.y;
+            baseX = r.left; baseY = r.top;
+            dragging = true;
+            moved = false;
+        }
+
+        function move(ev) {
+            if (!dragging) return;
+            var p = pt(ev);
+            var dx = p.x - startX, dy = p.y - startY;
+            if (!moved && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) moved = true;
+            if (!moved) return;
+            placeFab(baseX + dx, baseY + dy);
+            if (ev.cancelable) ev.preventDefault();
+        }
+
+        function up(ev) {
+            if (!dragging) return;
+            dragging = false;
+            if (!moved) return;   // 没动过 → 让 click 正常打开抽屉
+
+            // 吸到最近的一侧
+            var w = window.innerWidth || 375;
+            var mid = (parseFloat(node.style.left) || 0) + FAB_SIZE / 2;
+            var targetX = mid < w / 2 ? 8 : w - FAB_SIZE - 8;
+            var p = placeFab(targetX, parseFloat(node.style.top) || 0);
+            saveFab(p.x, p.y);
+
+            // 拖完这一下别再触发 click
+            suppressClick = true;
+            setTimeout(function () { suppressClick = false; }, 320);
+            if (ev && ev.cancelable) ev.preventDefault();
+        }
+
+        node.addEventListener('touchstart', down, { passive: true });
+        node.addEventListener('touchmove', move, { passive: false });
+        node.addEventListener('touchend', up, { passive: false });
+        node.addEventListener('touchcancel', up, { passive: true });
+        node.addEventListener('mousedown', function (ev) {
+            down(ev);
+            ev.preventDefault();
+        });
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
+
+        window.addEventListener('resize', function () {
+            if (node.style.left) placeFab(parseFloat(node.style.left) || 0, parseFloat(node.style.top) || 0);
+        });
+        window.addEventListener('orientationchange', function () {
+            setTimeout(function () {
+                if (node.style.left) placeFab(parseFloat(node.style.left) || 0, parseFloat(node.style.top) || 0);
+            }, 260);
+        });
+    }
+
     function afterApply(j, fallbackName) {
         if (j && j.code === 0) {
             toast('已应用：' + fallbackName + '　重开 B站 生效');
@@ -1095,7 +1200,11 @@ function overlayMain() {
             '<circle cx="18.2" cy="17.6" r="2.1"/>' +
             '<path d="M5.4 16.4l.9 2.2 2.2.9-2.2.9-.9 2.2-.9-2.2-2.2-.9 2.2-.9z"/>' +
             '</svg>';
-        fab.addEventListener('click', openSheet);
+        fab.addEventListener('click', function () {
+            if (suppressClick) return;
+            openSheet();
+        });
+        makeDraggable(fab);
 
         mask = el('div', 'bg-mask');
         mask.addEventListener('click', closeSheet);
@@ -1149,6 +1258,7 @@ function overlayMain() {
         root.appendChild(fab);
         root.appendChild(toastEl);
         document.body.appendChild(root);
+        restoreFab();
 
         loadCurrent();
         loadState().then(renderStatus, function () { });

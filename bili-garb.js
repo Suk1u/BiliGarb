@@ -1,16 +1,13 @@
 /**
  * BiliGarb — B站装扮 / 收藏集注入器 · Surge 模块脚本
  *
- * 单一文件，八种模式，靠 argument=mode=xxx 分发：
+ * 单一文件，六种模式，靠 argument=mode=xxx 分发：
  *   inject        http-response  在装扮 H5 外壳 HTML 里注入悬浮按钮与选择器
  *   bridge        http-request   截获页面发来的魔法 URL，落盘所选装扮或卡片
  *   spoof-skin    http-response  改写 resource/show/skin → 主题色 + 加载动画
  *   spoof-card    http-response  改写 web-interface/card → 挂件 + 名字颜色
  *   spoof-space   http-response  改写 space 系列 → 按名覆盖
  *   spoof-spacebg http-response  改写 Right/SpaceBackgroundInfo → 收藏集空间背景
- *   spoof-reply   http-response  改写 x/v2/reply* → 评论区装扮（评论背景 + 评论挂件）
- *   spoof-splash  http-response  改写 splash/brand|event → 开屏画面
- *   spoof-grpc    http-response  改写 grpc 评论列表 → 评论区装扮（App 主通道）
  *
  * 无外部依赖。不需要 WBI / appkey / access_key —— 我们只改写 App 自己
  * 发出的请求的响应，签名由 App 自己算。
@@ -78,15 +75,13 @@ function req(opts) {
  *   skin     个性主题      user_equip 块
  *   loading  加载动画      load_equip 块
  *   pendant  头像挂件      pendant 对象 + 名字颜色
- *   spacebg  空间背景      {image, animation} 或 {layers}
+ *   spacebg  空间背景      {image, animation}
  *   playicon 进度条        play_icon 块
- *   cardbg   评论装扮      user_sailing_v2.card_bg 的对象形状
- *   splash   开屏画面      {thumb, thumb_hash, duration, mode}
  */
-var SLOTS = ['skin', 'loading', 'pendant', 'spacebg', 'playicon', 'cardbg', 'splash'];
+var SLOTS = ['skin', 'loading', 'pendant', 'spacebg', 'playicon'];
 var SLOT_LABEL = {
     skin: '主题', loading: '加载动画', pendant: '头像挂件',
-    spacebg: '空间背景', playicon: '进度条', cardbg: '评论装扮', splash: '开屏'
+    spacebg: '空间背景', playicon: '进度条'
 };
 
 function emptyState() { return { v: 2, name: '', slots: {} }; }
@@ -211,46 +206,6 @@ function buildPlayIcon(it) {
 }
 
 /**
- * 评论装扮（评论区卡片背景）。
- *
- * 二进制里的读取点：回复 JSON 模型的键路径表明确写着
- *   dressCard → member.user_sailing_v2.card_bg
- *   member.user_sailing.pendant（评论区挂件）
- * 值的形状是 BAPIVasGarbModelUserCardBG：{id, name, image, jump_url, fan, type, image_group}。
- * 装扮包的 suit_items.card_bg[] 只给 properties.image / image_preview_small，
- * 这里翻成模型认识的形状。未知键 ObjC 会忽略，缺的键走默认值。
- */
-function buildCardBg(it) {
-    var p = (it && it.properties) || {};
-    var img = p.image || p.image_preview_small || '';
-    if (!img) return null;
-    return {
-        id: it.item_id,
-        name: it.name || '',
-        image: img,
-        jump_url: '',
-        fan: {},
-        type: p.sale_type || 'suit',
-        image_group: null
-    };
-}
-
-/** 开屏。收藏集的 splash.resource 已经自带 thumb + thumb_hash，不用自己算 md5。 */
-function buildSplash(sp) {
-    if (!sp || typeof sp !== 'object') return null;
-    var r = sp.resource || sp;
-    var pick = r.full_size || r.normal || null;
-    if (!pick || !pick.thumb) return null;
-    return {
-        thumb: pick.thumb,
-        thumb_hash: pick.thumb_hash || '',
-        duration: Number(sp.duration || 3) || 3,
-        mode: sp.mode || 'full',
-        logo_mode: sp.logo_mode
-    };
-}
-
-/**
  * 空间背景。有两种完全不同的形状：
  *   装扮套装：分层图 image1_landscape / image1_portrait … image5_*，外加 fan_no_image
  *   收藏集卡片：{image, animation}
@@ -310,10 +265,6 @@ function fromDetail(detail, fallbackName) {
 
     var pi = buildPlayIcon(firstPart(items.play_icon));
     if (pi) st.slots.playicon = { id: pi.id, name: name, icon: pi };
-
-    var cbi = firstPart(items.card_bg);
-    var cb = buildCardBg(cbi);
-    if (cb) st.slots.cardbg = { id: cb.id, name: cbi.name || name, card_bg: cb };
 
     var sbi = firstPart(items.space_bg);
     var sbg = buildSpaceBg(sbi);
@@ -765,13 +716,12 @@ function overlayMain() {
 
     // ── 样式 ────────────────────────────────────────────────
     var CSS = [
-        '.bg-fab{position:fixed;right:16px;bottom:calc(96px + env(safe-area-inset-bottom,0px));',
+        '.bg-fab{position:fixed;right:16px;bottom:calc(26px + env(safe-area-inset-bottom,0px));',
         'width:52px;height:52px;border-radius:50%;background:#FB7299;border:none;padding:0;margin:0;',
         'display:flex;align-items:center;justify-content:center;cursor:pointer;',
         'box-shadow:0 6px 20px rgba(251,114,153,.42);z-index:2147483646;',
         'transition:transform .15s ease,box-shadow .15s ease;-webkit-tap-highlight-color:transparent}',
         '.bg-fab:active{transform:scale(.92);box-shadow:0 3px 10px rgba(251,114,153,.36)}',
-        '.bg-fab{touch-action:none;user-select:none;-webkit-user-select:none}',
 
         '.bg-mask{position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,.46);',
         'z-index:2147483647;opacity:0;pointer-events:none;transition:opacity .2s ease}',
@@ -1047,168 +997,6 @@ function overlayMain() {
         sheet.classList.remove('on');
     }
 
-    // ── 悬浮按钮拖动 ────────────────────────────────────────
-    var FAB_SIZE = 52;
-    var FAB_KEY = 'bili.garb.fabpos';
-    var suppressClick = false;
-
-    function clampFab(x, y) {
-        var w = window.innerWidth || 375;
-        var h = window.innerHeight || 667;
-        return {
-            x: Math.max(8, Math.min(w - FAB_SIZE - 8, x)),
-            y: Math.max(8, Math.min(h - FAB_SIZE - 8, y))
-        };
-    }
-
-    function placeFab(x, y) {
-        var p = clampFab(x, y);
-        fab.style.left = p.x + 'px';
-        fab.style.top = p.y + 'px';
-        fab.style.right = 'auto';
-        fab.style.bottom = 'auto';
-        return p;
-    }
-
-    function saveFab(x, y) {
-        try { localStorage.setItem(FAB_KEY, JSON.stringify({ x: Math.round(x), y: Math.round(y) })); } catch (e) { }
-    }
-
-    function restoreFab() {
-        var saved = null;
-        try {
-            var raw = localStorage.getItem(FAB_KEY);
-            if (raw) saved = JSON.parse(raw);
-        } catch (e) { saved = null; }
-        if (!saved || typeof saved.x !== 'number') return;
-        placeFab(saved.x, saved.y);
-    }
-
-    // 拖动诊断计数：点一下按钮，toast 会报出收到多少事件（定位完就删）
-    var dbg = { down: 0, move: 0, up: 0 };
-
-    var dragBound = false;
-
-    function makeDraggable() {
-        if (dragBound) return;
-        dragBound = true;
-
-        var dragging = false, moved = false, isTouch = false;
-        var startX = 0, startY = 0, baseX = 0, baseY = 0, startT = 0;
-        var bound = false;
-
-        var OPT = { capture: true, passive: false };
-
-        function pt(ev) {
-            var t = (ev.touches && ev.touches[0]) || (ev.changedTouches && ev.changedTouches[0]) || ev;
-            return { x: t.clientX, y: t.clientY };
-        }
-
-        function onNode(ev) {
-            return !!fab && (fab === ev.target || fab.contains(ev.target));
-        }
-
-        function down(ev) {
-            if (!onNode(ev)) return;
-            var p = pt(ev);
-            var r = fab.getBoundingClientRect();
-            startX = p.x; startY = p.y;
-            baseX = r.left; baseY = r.top;
-            dragging = true;
-            moved = false;
-            startT = Date.now();
-            isTouch = !!(ev.touches && ev.touches.length);
-            dbg.down++;
-
-            // 只在自己身上按住时才挂 move/end —— 平时不挂，页面滚动不受影响。
-            // 挂在 window 捕获阶段：元素级监听在部分 WebView 里会被原生手势层吃掉。
-            if (!bound) {
-                bound = true;
-                window.addEventListener('touchmove', move, OPT);
-                window.addEventListener('touchend', up, OPT);
-                window.addEventListener('touchcancel', up, OPT);
-                window.addEventListener('mousemove', move, OPT);
-                window.addEventListener('mouseup', up, OPT);
-            }
-
-            // 拦住 WebView 的滚动手势，否则后面收不到 touchmove
-            if (ev.cancelable) ev.preventDefault();
-        }
-
-        function unbind() {
-            if (!bound) return;
-            bound = false;
-            window.removeEventListener('touchmove', move, OPT);
-            window.removeEventListener('touchend', up, OPT);
-            window.removeEventListener('touchcancel', up, OPT);
-            window.removeEventListener('mousemove', move, OPT);
-            window.removeEventListener('mouseup', up, OPT);
-        }
-
-        function move(ev) {
-            if (!dragging) return;
-            var p = pt(ev);
-            var dx = p.x - startX, dy = p.y - startY;
-            if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) moved = true;
-            if (!moved) return;
-            dbg.move++;
-            placeFab(baseX + dx, baseY + dy);
-            if (ev.cancelable) ev.preventDefault();
-        }
-
-        function up(ev) {
-            if (!dragging) return;
-            dragging = false;
-            dbg.up++;
-            unbind();
-            var dt = Date.now() - startT;
-
-            if (!moved) {
-                // 没位移 → 当点击。preventDefault 吃掉了合成 click，所以自己开。
-                if (dt < 700) {
-                    suppressClick = true;
-                    setTimeout(function () { suppressClick = false; }, 320);
-                    // 按住超过 250ms 还没位移 = 想拖但没拖成，把计数报出来
-                    if (dt > 250) {
-                        toast('拖动诊断：start ' + dbg.down + ' / move ' + dbg.move + ' / end ' + dbg.up);
-                    }
-                    openSheet();
-                }
-                return;
-            }
-
-            var w = window.innerWidth || 375;
-            var left = parseFloat(fab.style.left);
-            if (isNaN(left)) left = baseX;
-            var mid = left + FAB_SIZE / 2;
-            var targetX = mid < w / 2 ? 8 : w - FAB_SIZE - 8;
-            var p = placeFab(targetX, parseFloat(node.style.top) || baseY);
-            saveFab(p.x, p.y);
-
-            suppressClick = true;
-            setTimeout(function () { suppressClick = false; }, 320);
-            if (ev && ev.cancelable) ev.preventDefault();
-        }
-
-        // touchstart 常驻（捕获），move/end 按需挂
-        window.addEventListener('touchstart', down, OPT);
-        window.addEventListener('mousedown', down, OPT);
-
-        window.addEventListener('resize', function () {
-            var l = parseFloat(fab.style.left);
-            if (!isNaN(l)) placeFab(l, parseFloat(fab.style.top) || 0);
-        });
-        window.addEventListener('orientationchange', function () {
-            setTimeout(function () {
-                var l = parseFloat(fab.style.left);
-                if (!isNaN(l)) placeFab(l, parseFloat(fab.style.top) || 0);
-            }, 260);
-        });
-    }
-
-    // ── 应用动作 ────────────────────────────────────────────
-    // 13:19 那次重写把这一组弄丢了，导致 mount() 里 rs.addEventListener('click', reset)
-    // 抛 ReferenceError，整个挂载流程中断 —— 按钮根本不出现。
     function afterApply(j, fallbackName) {
         if (j && j.code === 0) {
             toast('已应用：' + fallbackName + '　重开 B站 生效');
@@ -1218,6 +1006,7 @@ function overlayMain() {
         render();
     }
 
+    /** 只应用一个部件，其余槽位保留 */
     function applyPart(item, slot) {
         if (!_fetch) { toast('当前环境不支持请求'); return; }
         toast('应用中…');
@@ -1293,12 +1082,9 @@ function overlayMain() {
     function mount() {
         if (document.getElementById('bg-root')) return;
 
-        if (!document.getElementById('bg-style')) {
-            var style = el('style');
-            style.id = 'bg-style';
-            style.textContent = CSS;
-            (document.head || document.documentElement).appendChild(style);
-        }
+        var style = el('style');
+        style.textContent = CSS;
+        (document.head || document.documentElement).appendChild(style);
 
         fab = el('button', 'bg-fab');
         fab.setAttribute('aria-label', '装扮注入器');
@@ -1309,11 +1095,7 @@ function overlayMain() {
             '<circle cx="18.2" cy="17.6" r="2.1"/>' +
             '<path d="M5.4 16.4l.9 2.2 2.2.9-2.2.9-.9 2.2-.9-2.2-2.2-.9 2.2-.9z"/>' +
             '</svg>';
-        fab.addEventListener('click', function () {
-            if (suppressClick) return;
-            openSheet();
-        });
-        makeDraggable();
+        fab.addEventListener('click', openSheet);
 
         mask = el('div', 'bg-mask');
         mask.addEventListener('click', closeSheet);
@@ -1367,12 +1149,11 @@ function overlayMain() {
         root.appendChild(fab);
         root.appendChild(toastEl);
         document.body.appendChild(root);
-        restoreFab();
 
         loadCurrent();
         loadState().then(renderStatus, function () { });
 
-        if (typeof history !== 'undefined' && history) ['pushState', 'replaceState'].forEach(function (k) {
+        ['pushState', 'replaceState'].forEach(function (k) {
             var orig = history[k];
             if (typeof orig !== 'function') return;
             history[k] = function () {
@@ -1390,51 +1171,10 @@ function overlayMain() {
         }, 1500);
     }
 
-    /**
-     * SPA 看门狗。
-     * 商城 → 装扮详情这种站内跳转不会重新加载页面，但框架可能把 body 整个换掉，
-     * 注入的 #bg-root 会跟着消失，而 DOMContentLoaded 早就过去了 —— 按钮就再也回不来。
-     * 这里盯着 DOM，发现节点没了就重新挂。
-     */
-    function watch() {
-        var pending = null;
-
-        function ensure() {
-            if (!document.body) return;
-            var root = document.getElementById('bg-root');
-            if (!root) { mount(); return; }
-            // 被挪到别的容器里就拽回来，保证它压在最上层
-            if (root.parentNode !== document.body) document.body.appendChild(root);
-            if (!fab || !document.contains(fab)) {
-                if (fab) root.appendChild(fab);
-                else mount();
-            }
-        }
-
-        function schedule() {
-            if (pending) return;
-            pending = setTimeout(function () { pending = null; ensure(); }, 120);
-        }
-
-        try {
-            var mo = new MutationObserver(schedule);
-            mo.observe(document.documentElement, { childList: true, subtree: true });
-        } catch (e) { }
-
-        // MutationObserver 在有些 WebView 里对 documentElement 不灵，再加个兜底轮询
-        setInterval(ensure, 1200);
-
-        // 从 bfcache 回来时也补一次
-        window.addEventListener('pageshow', function (ev) {
-            if (ev && ev.persisted) setTimeout(ensure, 60);
-        });
-    }
-
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function () { mount(); watch(); });
+        document.addEventListener('DOMContentLoaded', mount);
     } else {
         mount();
-        watch();
     }
 }
 
@@ -1594,20 +1334,6 @@ function doBridgeApplyCard(url) {
                     name: info.name || ('卡 #' + info.id),
                     image: sb.image || '',
                     animation: sb.animation || null
-                };
-            }
-
-            // 收藏集卡片自带开屏画面，顺手也填进开屏槽
-            var sp = buildSplash(info.splash);
-            if (sp) {
-                cur.slots.splash = {
-                    id: info.id,
-                    name: info.name || ('卡 #' + info.id),
-                    thumb: sp.thumb,
-                    thumb_hash: sp.thumb_hash,
-                    duration: sp.duration,
-                    mode: sp.mode,
-                    logo_mode: sp.logo_mode
                 };
             }
             cur.name = info.name || cur.name;
@@ -2210,440 +1936,6 @@ function doSpoofSpaceBg() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// §7b  mode=spoof-reply —— 评论区装扮
-// ─────────────────────────────────────────────────────────────
-
-/**
- * 评论区的装扮走两条完全不同的通道：
- *
- *   HTTP  x/v2/reply*            回复 JSON 模型，键路径表在二进制里：
- *                                dressCard → member.user_sailing_v2.card_bg
- *                                member.user_sailing.pendant / .image
- *   gRPC  bilibili.main.community.reply.v1
- *                                模型是 BAPIMainCommunityReplyV1MemberV2.userSailing
- *                                → BAPIVasGarbModelUserSailing{pendant, cardBg, cardBgWithFocus}
- *
- * 这里只做 HTTP 那一路。gRPC 那一路要改 protobuf 二进制，
- * 见 docs/bili-9.1.2-能力边界.md 里的说明（当前模块没有接管）。
- *
- * 只改自己：评论列表里会混着别人的楼层，按 member.mid 判断。
- */
-function doSpoofReply() {
-    if (typeof $response === 'undefined' || !$response.body) return finish({});
-
-    var st = readState();
-    if (!st || !st.slots) return finish({});
-
-    var cb = st.slots.cardbg;
-    var pd = st.slots.pendant;
-    if (!cb && !pd) return finish({});
-
-    var body;
-    try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
-    if (!body) return finish({});
-
-    var hit = 0;
-
-    function dressMember(m) {
-        if (!m || typeof m !== 'object' || Array.isArray(m)) return;
-        if (!isSelf(m)) return;
-
-        if (cb && cb.card_bg) {
-            if (!m.user_sailing_v2 || typeof m.user_sailing_v2 !== 'object') m.user_sailing_v2 = {};
-            m.user_sailing_v2.card_bg = cb.card_bg;
-            hit++;
-        }
-
-        if (pd && pd.pendant) {
-            if (!m.user_sailing || typeof m.user_sailing !== 'object') m.user_sailing = {};
-            m.user_sailing.pendant = pd.pendant;
-            // 老版本模型直接读 member.pendant
-            m.pendant = pd.pendant;
-            hit++;
-        }
-
-        // v1 的评论卡片背景字段名是 cardbg（没有下划线），值是 URL 字符串。
-        // 只在原本就有这个键时才动 —— 没有键说明这个版本的模型不读它。
-        if (cb && cb.card_bg && cb.card_bg.image &&
-            m.user_sailing && typeof m.user_sailing.cardbg === 'string') {
-            m.user_sailing.cardbg = cb.card_bg.image;
-            hit++;
-        }
-    }
-
-    // 顶层 data.replies / data.root / data.replies[].replies 都靠递归覆盖
-    walkObject(body, function (o) {
-        if (o.member) dressMember(o.member);
-        // 部分接口把被评论者放在 reply_control / upper 里，形状相同，一起处理
-        if (o.user && o.user.mid != null) dressMember(o.user);
-    }, 0);
-
-    if (!hit) return finish({});
-    finish({ body: JSON.stringify(body) });
-}
-
-// ─────────────────────────────────────────────────────────────
-// §7c  mode=spoof-splash —— 开屏画面
-// ─────────────────────────────────────────────────────────────
-
-/**
- * 开屏有两个接口，模型形状不同但图片字段一样：
- *   品牌  x/v2/splash/brand/list   BFCBrandSplashListModel{list[], show[]}
- *         list[] = BFCBrandSplashModel{splash_id, thumb, thumb_hash, duration, mode}
- *         show[] = 允许展示的 splash_id 列表
- *   活动  x/v2/splash/event/list2   BFCEventSplashModel{elements[], resources[]}
- *
- * 所以按结构签名走：任何同时带 thumb 和 thumb_hash 的对象都是可替换的图片位。
- * 品牌列表额外要保证 show[] 里有我们那条的 splash_id，否则 App 不会展示。
- */
-var SPLASH_ID = 'bili-garb';
-
-function doSpoofSplash() {
-    if (typeof $response === 'undefined' || !$response.body) return finish({});
-
-    var st = readState();
-    var sl = st && st.slots && st.slots.splash;
-    if (!sl || !sl.thumb) return finish({});
-
-    var body;
-    try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
-    if (!body || !body.data || typeof body.data !== 'object') return finish({});
-
-    var hit = 0;
-
-    // 1. 已有的图片位按签名替换
-    walkObject(body.data, function (o) {
-        if (typeof o.thumb !== 'string' || !o.thumb) return;
-        if (!('thumb_hash' in o)) return;
-        o.thumb = sl.thumb;
-        o.thumb_hash = sl.thumb_hash || '';
-        hit++;
-    }, 0);
-
-    // 2. 品牌列表：没有可用条目就自己补一条，并让它出现在 show[] 里。
-    //    活动开屏的 data.list 也是数组，但条目带 identifier/elements 而没有 splash_id，
-    //    靠这个差别把两个接口分开，别把活动开屏的结构写坏。
-    var isBrand = Array.isArray(body.data.list) && (
-        body.data.list.length
-            ? body.data.list.every(function (e) { return e && typeof e === 'object' && 'splash_id' in e; })
-            : Array.isArray(body.data.show)
-    );
-
-    if (isBrand && Array.isArray(body.data.list)) {
-        var mine = null;
-        for (var i = 0; i < body.data.list.length; i++) {
-            var e = body.data.list[i];
-            if (e && e.splash_id === SPLASH_ID) { mine = e; break; }
-        }
-        if (!mine) {
-            mine = {
-                splash_id: SPLASH_ID,
-                thumb: sl.thumb,
-                thumb_hash: sl.thumb_hash || '',
-                duration: sl.duration || 3,
-                mode: sl.mode || 'full',
-                show_logo: false,
-                next_index: 0,
-                source: 'garb',
-                logo_url: ''
-            };
-            body.data.list.unshift(mine);
-            hit++;
-        } else {
-            mine.thumb = sl.thumb;
-            mine.thumb_hash = sl.thumb_hash || '';
-            mine.duration = sl.duration || mine.duration || 3;
-        }
-
-        if (Array.isArray(body.data.show)) {
-            if (body.data.show.indexOf(SPLASH_ID) < 0) body.data.show.unshift(SPLASH_ID);
-        } else {
-            body.data.show = [SPLASH_ID];
-        }
-    }
-
-    if (!hit) return finish({});
-    finish({ body: JSON.stringify(body) });
-}
-
-// ─────────────────────────────────────────────────────────────
-// §7d  mode=spoof-grpc —— 评论区装扮（gRPC 主通道）
-// ─────────────────────────────────────────────────────────────
-
-/**
- * App 原生的评论列表不走 HTTP JSON，走 grpc.biliapi.net 上的
- * bilibili.main.community.reply.v1.Main/MainList。要改就得改 protobuf 二进制。
- *
- * 下面这套字段号不是猜的 —— 从 IPA 里读出来的（IDA 反编译
- * `+[Cls descriptor]`，字段描述符数组里 `number` 就是字段号）：
- *
- *   MainListReply
- *     2  repliesArray      repeated ReplyInfo
- *     14 topRepliesArray   repeated ReplyInfo
- *     27 mixedCardsArray
- *   ReplyInfo
- *     1  repliesArray      repeated ReplyInfo（楼中楼，递归）
- *     13 member            Member（老模型，没有 userSailing）
- *     15 memberV2          MemberV2   ← 要改的是这个
- *   MemberV2
- *     9  userSailing       UserSailing
- *   UserSailing
- *     1  pendant
- *     2  cardBg            UserCardBG
- *     3  cardBgWithFocus   UserCardBG
- *   UserCardBG
- *     1  id_p   (int64)    2  name  (string)    3  image (string)
- *
- * gRPC 帧格式：[1 字节压缩标志][4 字节大端长度][protobuf]
- */
-
-var PB_FRAME_DONE = 0x80;   // trailer 帧标志位
-
-function strBytes(s) {
-    var out = [];
-    for (var i = 0; i < s.length; i++) {
-        var c = s.charCodeAt(i);
-        if (c < 0x80) out.push(c);
-        else if (c < 0x800) {
-            out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
-        } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
-            var c2 = s.charCodeAt(++i);
-            var cp = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
-            out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f),
-                0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-        } else {
-            out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-        }
-    }
-    return new Uint8Array(out);
-}
-
-function pbVarint(b, p, end) {
-    var v = 0, shift = 0, byte;
-    do {
-        if (p >= end) return null;
-        byte = b[p++];
-        v += (byte & 0x7f) * Math.pow(2, shift);
-        shift += 7;
-    } while (byte & 0x80);
-    return { v: v, p: p };
-}
-
-function pbEncodeVarint(v, out) {
-    while (v > 0x7f) {
-        out.push((v & 0x7f) | 0x80);
-        v = Math.floor(v / 128);
-    }
-    out.push(v & 0x7f);
-}
-
-/** 解一层 protobuf；解析失败返回 null（调用方据此原样放行） */
-function pbDecode(bytes, start, end) {
-    var out = [];
-    var p = start === undefined ? 0 : start;
-    var e = end === undefined ? bytes.length : end;
-    while (p < e) {
-        var t = pbVarint(bytes, p, e);
-        if (!t) return null;
-        p = t.p;
-        var n = Math.floor(t.v / 8);
-        var w = t.v % 8;
-        if (n <= 0) return null;
-
-        if (w === 0) {
-            var v0 = pbVarint(bytes, p, e);
-            if (!v0) return null;
-            out.push({ n: n, w: 0, v: v0.v });
-            p = v0.p;
-        } else if (w === 1) {
-            if (p + 8 > e) return null;
-            out.push({ n: n, w: 1, v: bytes.slice(p, p + 8) });
-            p += 8;
-        } else if (w === 5) {
-            if (p + 4 > e) return null;
-            out.push({ n: n, w: 5, v: bytes.slice(p, p + 4) });
-            p += 4;
-        } else if (w === 2) {
-            var l = pbVarint(bytes, p, e);
-            if (!l) return null;
-            p = l.p;
-            if (p + l.v > e) return null;
-            out.push({ n: n, w: 2, v: bytes.slice(p, p + l.v) });
-            p += l.v;
-        } else {
-            return null;   // group 不支持
-        }
-    }
-    return out;
-}
-
-function pbEncode(fields) {
-    var out = [];
-    for (var i = 0; i < fields.length; i++) {
-        var f = fields[i];
-        pbEncodeVarint(f.n * 8 + f.w, out);
-        if (f.w === 0) pbEncodeVarint(f.v, out);
-        else {
-            var v = f.v;
-            pbEncodeVarint(v.length, out);
-            for (var k = 0; k < v.length; k++) out.push(v[k]);
-        }
-    }
-    return new Uint8Array(out);
-}
-
-/** 把一个子消息字段的 payload 换成 patch 后的结果；patch 返回 null 表示没动 */
-function pbPatchChild(fields, num, patch) {
-    var hit = false;
-    for (var i = 0; i < fields.length; i++) {
-        var f = fields[i];
-        if (f.n !== num || f.w !== 2) continue;
-        var sub = pbDecode(f.v);
-        if (!sub) continue;
-        var res = patch(sub);
-        if (res) { f.v = res; hit = true; }
-    }
-    return hit;
-}
-
-/** UserCardBG：写 image（3），顺带 id（1）/ name（2） */
-function patchCardBG(fields, cb) {
-    var hit = false;
-    for (var i = 0; i < fields.length; i++) {
-        var f = fields[i];
-        if (f.n === 3 && f.w === 2 && cb.image) { f.v = strBytes(cb.image); hit = true; }
-        if (f.n === 1 && f.w === 0 && cb.id != null) { f.v = Number(cb.id) || 0; hit = true; }
-        if (f.n === 2 && f.w === 2 && cb.name) { f.v = strBytes(cb.name); hit = true; }
-    }
-    if (!hit && cb.image) {           // 原本没有 cardBg 字段，补一个
-        fields.push({ n: 3, w: 2, v: strBytes(cb.image) });
-        hit = true;
-    }
-    return hit;
-}
-
-/** UserSailing：cardBg(2) / cardBgWithFocus(3) 都写同一张 */
-function patchUserSailing(fields, cb) {
-    var hit = pbPatchChild(fields, 2, function (sub) { return patchCardBG(sub, cb) ? pbEncode(sub) : null; });
-    var hit2 = pbPatchChild(fields, 3, function (sub) { return patchCardBG(sub, cb) ? pbEncode(sub) : null; });
-    if (!hit && !hit2) {
-        var sub2 = [];
-        patchCardBG(sub2, cb);
-        fields.push({ n: 2, w: 2, v: pbEncode(sub2) });
-        return true;
-    }
-    return true;
-}
-
-/** MemberV2：userSailing(9) */
-function patchMemberV2(fields, cb) {
-    return pbPatchChild(fields, 9, function (sub) { return patchUserSailing(sub, cb) ? pbEncode(sub) : null; });
-}
-
-/** ReplyInfo：memberV2(15)，楼中楼 replies(1) 递归 */
-function patchReplyInfo(fields, cb, depth) {
-    var hit = pbPatchChild(fields, 15, function (sub) { return patchMemberV2(sub, cb) ? pbEncode(sub) : null; });
-    if (depth < 4) {
-        for (var i = 0; i < fields.length; i++) {
-            var f = fields[i];
-            if (f.n !== 1 || f.w !== 2) continue;
-            var sub = pbDecode(f.v);
-            if (!sub) continue;
-            if (patchReplyInfo(sub, cb, depth + 1)) { f.v = pbEncode(sub); hit = true; }
-        }
-    }
-    return hit;
-}
-
-/** MainListReply：replies(2) / topReplies(14) / mixedCards(27) */
-function patchMainList(fields, cb) {
-    var hit = false;
-    var nums = [2, 14, 27];
-    for (var k = 0; k < nums.length; k++) {
-        var num = nums[k];
-        for (var i = 0; i < fields.length; i++) {
-            var f = fields[i];
-            if (f.n !== num || f.w !== 2) continue;
-            var sub = pbDecode(f.v);
-            if (!sub) continue;
-            if (patchReplyInfo(sub, cb, 0)) { f.v = pbEncode(sub); hit = true; }
-        }
-    }
-    return hit;
-}
-
-/** 逐帧处理 gRPC body */
-function patchGrpcBody(bytes, cb) {
-    var out = [];
-    var p = 0;
-    var changed = false;
-    while (p + 5 <= bytes.length) {
-        var flag = bytes[p];
-        var len = (bytes[p + 1] << 24) | (bytes[p + 2] << 16) | (bytes[p + 3] << 8) | bytes[p + 4];
-        len = len >>> 0;
-        if (p + 5 + len > bytes.length) break;
-
-        var payload = bytes.subarray(p + 5, p + 5 + len);
-        var newPayload = payload;
-
-        if (!(flag & PB_FRAME_DONE)) {
-            var fields = pbDecode(payload);
-            if (fields && patchMainList(fields, cb)) {
-                newPayload = pbEncode(fields);
-                changed = true;
-            }
-        }
-
-        out.push(flag);
-        out.push((newPayload.length >>> 24) & 0xff);
-        out.push((newPayload.length >>> 16) & 0xff);
-        out.push((newPayload.length >>> 8) & 0xff);
-        out.push(newPayload.length & 0xff);
-        for (var i = 0; i < newPayload.length; i++) out.push(newPayload[i]);
-
-        p += 5 + len;
-    }
-    if (!changed) return null;
-    return new Uint8Array(out);
-}
-
-function toBytes(body) {
-    if (!body) return null;
-    // 鸭子类型优先：Surge 给的是 Uint8Array，测试台在另一个 realm 里造的同名对象
-    // 过不了 instanceof，但行为一样。
-    if (typeof body.length === 'number' && typeof body.subarray === 'function') return body;
-    if (typeof Uint8Array !== 'undefined' && body instanceof Uint8Array) return body;
-    if (typeof ArrayBuffer !== 'undefined' && body instanceof ArrayBuffer) return new Uint8Array(body);
-    if (Array.isArray(body)) return new Uint8Array(body);
-    if (typeof body === 'string') {
-        var arr = [];
-        for (var i = 0; i < body.length; i++) arr.push(body.charCodeAt(i) & 0xff);
-        return new Uint8Array(arr);
-    }
-    return null;
-}
-
-function doSpoofGrpc() {
-    if (typeof $response === 'undefined' || !$response.body) return finish({});
-
-    var url = (typeof $request !== 'undefined' && $request.url) || '';
-    if (url.indexOf('bilibili.main.community.reply.v1') < 0) return finish({});
-
-    var st = readState();
-    var cb = st && st.slots && st.slots.cardbg && st.slots.cardbg.card_bg;
-    if (!cb || !cb.image) return finish({});
-
-    var bytes = toBytes($response.body);
-    if (!bytes || bytes.length < 5) return finish({});
-
-    var out = null;
-    try { out = patchGrpcBody(bytes, cb); } catch (e) { out = null; }
-    if (!out) return finish({});
-
-    finish({ body: out });
-}
-
-// ─────────────────────────────────────────────────────────────
 // §8  mode=capture —— 抓一次「使用」请求，供人工分析
 // ─────────────────────────────────────────────────────────────
 
@@ -2761,9 +2053,6 @@ function doFakeUnlock() {
         else if (mode === 'spoof-card') doSpoofCard();
         else if (mode === 'spoof-space') doSpoofSpace();
         else if (mode === 'spoof-spacebg') doSpoofSpaceBg();
-        else if (mode === 'spoof-reply') doSpoofReply();
-        else if (mode === 'spoof-splash') doSpoofSplash();
-        else if (mode === 'spoof-grpc') doSpoofGrpc();
         else if (mode === 'fake-unlock') doFakeUnlock();
         else finish({});
     } catch (e) {

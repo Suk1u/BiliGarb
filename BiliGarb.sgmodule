@@ -8,55 +8,36 @@
 # 在装扮 H5 外壳 HTML 的 </head> 前插入悬浮按钮与选择器。
 # 注入点必须在 head 里 —— 该页所有 bundle 的 script 标签都堆在 </body> 之前，
 # 放在 head 才能抢在 App 业务代码之前 hook 住 fetch / XHR。
-BiliGarb-Inject = type=http-response,pattern=^https?://www\.bilibili\.com/h5/mall/,requires-body=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=inject
+BiliGarb-Inject = type=http-response,pattern=^https?://www\.bilibili\.com/h5/mall/,requires-body=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=10,argument=inject
 
 # ── 桥接层 ────────────────────────────────────────────────
 # 页面里的按钮不碰 Surge 存储，而是 GET 一个魔法 URL，
 # 由这段脚本落盘。返回的 JSON 必须带 CORS 头，否则页面读不到 body。
-BiliGarb-Bridge = type=http-request,pattern=^https?://api\.bilibili\.com/x/garb/_sg/,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=15,argument=bridge
+BiliGarb-Bridge = type=http-request,pattern=^https?://api\.bilibili\.com/x/garb/_sg/,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=15,argument=bridge
 
 # ── 抓包层（只在排查时用）─────────────────────────────────
 # 把装扮 / 收藏集 / 空间相关的 POST 记下来（csrf 自动抹掉），
 # 然后在 Safari 打开 https://api.bilibili.com/x/garb/_sg/dump 取回。
 # 不改动任何请求，只是旁观。正则里用 (?!_sg) 排除自己的桥，避免抢走桥接请求。
-BiliGarb-Capture = type=http-request,pattern=^https?://(api\.bilibili\.com/x/(garb/(?!_sg)|vas/dlc_act/)|app\.bilibili\.com/x/v2/space/),script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=capture
+BiliGarb-Capture = type=http-request,pattern=^https?://(api\.bilibili\.com/x/(garb/(?!_sg)|vas/dlc_act/)|app\.bilibili\.com/x/v2/space/),script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=10,argument=capture
 
 # ── 伪装层 ────────────────────────────────────────────────
 # App 启动时读这个接口决定主题色与加载动画。改写 user_equip 里的
 # package_url / package_md5，App 会自己去 B站 CDN 拉那套装扮的 zip 并套用。
-BiliGarb-Skin = type=http-response,pattern=^https?://app\.bilibili\.com/x/resource/show/skin,requires-body=true,max-size=262144,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-skin
+BiliGarb-Skin = type=http-response,pattern=^https?://app\.bilibili\.com/x/resource/show/skin,requires-body=true,max-size=262144,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-skin
 
 # 名片：挂件 + 名字颜色。只改自己（按 Cookie 里的 DedeUserID 判断）。
-BiliGarb-Card = type=http-response,pattern=^https?://api\.bilibili\.com/x/web-interface/card,requires-body=true,max-size=262144,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-card
+BiliGarb-Card = type=http-response,pattern=^https?://api\.bilibili\.com/x/web-interface/card,requires-body=true,max-size=262144,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-card
 
 # 空间页：按名覆盖 pendant / nickname_color，认不出的键原样放过。
-BiliGarb-Space = type=http-response,pattern=^https?://(api|app)\.bilibili\.com/x/(space|v2/space),requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-space
+BiliGarb-Space = type=http-response,pattern=^https?://(api|app)\.bilibili\.com/x/(space|v2/space),requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-space
 
 # ── 收藏集 ────────────────────────────────────────────────
 # 收藏集卡片的空间背景。这个接口需要登录，响应结构没法在外部验证，
 # 所以用结构签名匹配：只改带 animation.animation_url / animation_backup_image
 # 的那个对象，认不出就整包放行。注入层已经覆盖 digital-card 系列页面
 # （www.bilibili.com/h5/mall/digital-card/*），同一个按钮在那里也能用。
-BiliGarb-SpaceBg = type=http-response,pattern=^https?://api\.bilibili\.com/x/garb/Right/SpaceBackgroundInfo,requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-spacebg
-
-# ── 评论区 ────────────────────────────────────────────────
-# 评论装扮。二进制里的键路径表：dressCard → member.user_sailing_v2.card_bg、
-# member.user_sailing.pendant。只改自己（按 member.mid 比对 Cookie 的 DedeUserID）。
-# 注意：App 的评论列表主通道是 gRPC（bilibili.main.community.reply.v1），
-# 这一条只覆盖走 HTTP JSON 的页面（H5 评论区等）。原生评论列表见下面第 10 条。
-BiliGarb-Reply = type=http-response,pattern=^https?://api\.bilibili\.com/x/v2/reply,requires-body=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-reply
-
-# 原生评论列表（gRPC）。字段号是从 IPA 里读出来的，不是猜的：
-#   MainListReply.replies=2 → ReplyInfo.memberV2=15 → MemberV2.userSailing=9
-#   → UserSailing.cardBg=2 / cardBgWithFocus=3 → UserCardBG.image=3
-# binary-body-mode=true 让 body 以 Uint8Array 进出，脚本才能改 protobuf。
-# pattern 只圈评论服务，别的 gRPC 流量一个字节都不碰。
-BiliGarb-Grpc = type=http-response,pattern=^https?://grpc\.biliapi\.net/bilibili\.main\.community\.reply\.v1,requires-body=true,binary-body-mode=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-grpc
-
-# ── 开屏 ──────────────────────────────────────────────────
-# 品牌开屏（BFCBrandSplashListModel）和活动开屏（BFCEventSplashModel）一起接管。
-# 图片地址和 md5 都从收藏集卡片的 splash.resource 来，不自己算摘要。
-BiliGarb-Splash = type=http-response,pattern=^https?://(app|api)\.bilibili\.com/x/v2/splash/,requires-body=true,max-size=1048576,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@9dec7d6/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-splash
+BiliGarb-SpaceBg = type=http-response,pattern=^https?://api\.bilibili\.com/x/garb/Right/SpaceBackgroundInfo,requires-body=true,max-size=524288,script-path=https://gcore.jsdelivr.net/gh/Suk1u/BiliGarb@d14f200/bili-garb.js,script-update-interval=86400,timeout=10,argument=spoof-spacebg
 
 [MITM]
-hostname = %APPEND% www.bilibili.com, api.bilibili.com, app.bilibili.com, grpc.biliapi.net
+hostname = %APPEND% www.bilibili.com, api.bilibili.com, app.bilibili.com

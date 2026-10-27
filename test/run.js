@@ -119,6 +119,10 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('带了事件计数（诊断用）', code.indexOf('dbg.down++') > -1 && code.indexOf('dbg.move++') > -1);
         ok('move/end 按需挂载，平时不拖累滚动', code.indexOf('function unbind()') > -1);
         ok('touchstart 常驻捕获', code.indexOf("window.addEventListener('touchstart', down, OPT)") > -1);
+        ok('有 SPA 看门狗（节点被换掉会补回来）',
+            code.indexOf('new MutationObserver(schedule)') > -1 && code.indexOf('setInterval(ensure') > -1);
+        ok('style 只插一次（id 判重）', code.indexOf("getElementById('bg-style')") > -1);
+        ok('重复 mount 不会重复绑 window 监听', code.indexOf('dragBound') > -1);
         ok('touchmove 也挂在捕获阶段',
             code.indexOf("window.addEventListener('touchmove', move, OPT)") > -1);
         ok('拖完抑制一次 click', code.indexOf('suppressClick') > -1);

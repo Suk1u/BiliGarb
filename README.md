@@ -14,7 +14,7 @@
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `../docs/bili-garb-coverage.md` | 装扮覆盖情况：哪些做了、哪些做不了、为什么 |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，254 条断言 |
+| `test/run.js` | 本地测试台，257 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -70,7 +70,9 @@ https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 
 打开 B站 App → 我的 → 装扮（或任意装扮详情页 / 收藏集页面）。右下角出现一个粉色圆按钮。
 
-**按钮可以拖。** 按住拖动，松手自动吸到最近的一侧，位置记在本地，下次进来还在那儿。轻点才打开抽屉 —— 拖完那一下不会误触。
+**按钮可以拖。** 按住拖动，松手自动吸到最近的一侧，位置记在本地，下次进来还在那儿。轻点才打开抽屉 —— 拖完那一下不会误触。默认位置在底部 tab 栏上方 96px，不会压住导航。
+
+**站内跳转不会丢。** 商城 → 装扮详情这种 SPA 跳转不会重新加载页面，框架有时会把 `body` 整个换掉，注入的节点跟着消失。现在有看门狗盯着 DOM，发现 `#bg-root` 不在了就重新挂回去。
 
 点它，底部弹出选择器，分两组：
 
@@ -400,7 +402,7 @@ https://api.bilibili.com/x/garb/_sg/set-equip?json=<URL 编码后的整份 JSON>
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 254 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 257 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

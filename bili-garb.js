@@ -765,7 +765,7 @@ function overlayMain() {
 
     // ── 样式 ────────────────────────────────────────────────
     var CSS = [
-        '.bg-fab{position:fixed;right:16px;bottom:calc(26px + env(safe-area-inset-bottom,0px));',
+        '.bg-fab{position:fixed;right:16px;bottom:calc(96px + env(safe-area-inset-bottom,0px));',
         'width:52px;height:52px;border-radius:50%;background:#FB7299;border:none;padding:0;margin:0;',
         'display:flex;align-items:center;justify-content:center;cursor:pointer;',
         'box-shadow:0 6px 20px rgba(251,114,153,.42);z-index:2147483646;',
@@ -1087,7 +1087,12 @@ function overlayMain() {
     // 拖动诊断计数：点一下按钮，toast 会报出收到多少事件（定位完就删）
     var dbg = { down: 0, move: 0, up: 0 };
 
-    function makeDraggable(node) {
+    var dragBound = false;
+
+    function makeDraggable() {
+        if (dragBound) return;
+        dragBound = true;
+
         var dragging = false, moved = false, isTouch = false;
         var startX = 0, startY = 0, baseX = 0, baseY = 0, startT = 0;
         var bound = false;
@@ -1100,13 +1105,13 @@ function overlayMain() {
         }
 
         function onNode(ev) {
-            return node === ev.target || node.contains(ev.target);
+            return !!fab && (fab === ev.target || fab.contains(ev.target));
         }
 
         function down(ev) {
             if (!onNode(ev)) return;
             var p = pt(ev);
-            var r = node.getBoundingClientRect();
+            var r = fab.getBoundingClientRect();
             startX = p.x; startY = p.y;
             baseX = r.left; baseY = r.top;
             dragging = true;
@@ -1163,14 +1168,17 @@ function overlayMain() {
                 if (dt < 700) {
                     suppressClick = true;
                     setTimeout(function () { suppressClick = false; }, 320);
-                    toast('拖动诊断：start ' + dbg.down + ' / move ' + dbg.move + ' / end ' + dbg.up);
+                    // 按住超过 250ms 还没位移 = 想拖但没拖成，把计数报出来
+                    if (dt > 250) {
+                        toast('拖动诊断：start ' + dbg.down + ' / move ' + dbg.move + ' / end ' + dbg.up);
+                    }
                     openSheet();
                 }
                 return;
             }
 
             var w = window.innerWidth || 375;
-            var left = parseFloat(node.style.left);
+            var left = parseFloat(fab.style.left);
             if (isNaN(left)) left = baseX;
             var mid = left + FAB_SIZE / 2;
             var targetX = mid < w / 2 ? 8 : w - FAB_SIZE - 8;
@@ -1187,13 +1195,13 @@ function overlayMain() {
         window.addEventListener('mousedown', down, OPT);
 
         window.addEventListener('resize', function () {
-            var l = parseFloat(node.style.left);
-            if (!isNaN(l)) placeFab(l, parseFloat(node.style.top) || 0);
+            var l = parseFloat(fab.style.left);
+            if (!isNaN(l)) placeFab(l, parseFloat(fab.style.top) || 0);
         });
         window.addEventListener('orientationchange', function () {
             setTimeout(function () {
-                var l = parseFloat(node.style.left);
-                if (!isNaN(l)) placeFab(l, parseFloat(node.style.top) || 0);
+                var l = parseFloat(fab.style.left);
+                if (!isNaN(l)) placeFab(l, parseFloat(fab.style.top) || 0);
             }, 260);
         });
     }
@@ -1201,9 +1209,12 @@ function overlayMain() {
     function mount() {
         if (document.getElementById('bg-root')) return;
 
-        var style = el('style');
-        style.textContent = CSS;
-        (document.head || document.documentElement).appendChild(style);
+        if (!document.getElementById('bg-style')) {
+            var style = el('style');
+            style.id = 'bg-style';
+            style.textContent = CSS;
+            (document.head || document.documentElement).appendChild(style);
+        }
 
         fab = el('button', 'bg-fab');
         fab.setAttribute('aria-label', '装扮注入器');
@@ -1218,7 +1229,7 @@ function overlayMain() {
             if (suppressClick) return;
             openSheet();
         });
-        makeDraggable(fab);
+        makeDraggable();
 
         mask = el('div', 'bg-mask');
         mask.addEventListener('click', closeSheet);
@@ -1295,10 +1306,51 @@ function overlayMain() {
         }, 1500);
     }
 
+    /**
+     * SPA 看门狗。
+     * 商城 → 装扮详情这种站内跳转不会重新加载页面，但框架可能把 body 整个换掉，
+     * 注入的 #bg-root 会跟着消失，而 DOMContentLoaded 早就过去了 —— 按钮就再也回不来。
+     * 这里盯着 DOM，发现节点没了就重新挂。
+     */
+    function watch() {
+        var pending = null;
+
+        function ensure() {
+            if (!document.body) return;
+            var root = document.getElementById('bg-root');
+            if (!root) { mount(); return; }
+            // 被挪到别的容器里就拽回来，保证它压在最上层
+            if (root.parentNode !== document.body) document.body.appendChild(root);
+            if (!fab || !document.contains(fab)) {
+                if (fab) root.appendChild(fab);
+                else mount();
+            }
+        }
+
+        function schedule() {
+            if (pending) return;
+            pending = setTimeout(function () { pending = null; ensure(); }, 120);
+        }
+
+        try {
+            var mo = new MutationObserver(schedule);
+            mo.observe(document.documentElement, { childList: true, subtree: true });
+        } catch (e) { }
+
+        // MutationObserver 在有些 WebView 里对 documentElement 不灵，再加个兜底轮询
+        setInterval(ensure, 1200);
+
+        // 从 bfcache 回来时也补一次
+        window.addEventListener('pageshow', function (ev) {
+            if (ev && ev.persisted) setTimeout(ensure, 60);
+        });
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', mount);
+        document.addEventListener('DOMContentLoaded', function () { mount(); watch(); });
     } else {
         mount();
+        watch();
     }
 }
 

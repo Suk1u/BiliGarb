@@ -87,6 +87,39 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
 (async function main() {
 
     // ─────────────────────────────────────────────────────────
+    console.log('\n[0] overlay 能在假 DOM 里挂载（按钮真的会出来）');
+    {
+        const { runOverlay } = require('./dom.js');
+        const boot = await run({ argument: 'noop' });
+        const code = boot.ctx.OVERLAY_JS;
+        const r = runOverlay(code);
+
+        ok('overlay 执行不抛错', r.error === null, r.error ? r.error.message : '');
+        ok('延迟回调里也不抛错', r.deferredErrors.length === 0, r.deferredErrors.join(' | '));
+        ok('bg-root 挂到了 body 上', !!r.root && r.bodyChildren.indexOf('bg-root') > -1);
+        ok('四个子节点齐全（mask/sheet/fab/toast）',
+            r.children.length === 4 &&
+            r.children.some(c => c.indexOf('bg-mask') > -1) &&
+            r.children.some(c => c.indexOf('bg-sheet') > -1) &&
+            r.children.some(c => c.indexOf('bg-fab') > -1) &&
+            r.children.some(c => c.indexOf('bg-toast') > -1),
+            r.children.join(','));
+
+        // 拖动接线（照 Bili-skin 的做法）
+        ok('touchstart 挂在元素上、passive:true',
+            code.indexOf("node.addEventListener('touchstart', fabDown, { passive: true })") > -1);
+        ok('touchmove 是 passive:false（要能 preventDefault）',
+            code.indexOf("node.addEventListener('touchmove', fabMove, { passive: false })") > -1);
+        ok('按下时把 right/bottom 换成 left/top',
+            code.indexOf("fab.style.right = 'auto'") > -1);
+        ok('位移阈值 5px 才算拖', code.indexOf('Math.abs(dx) < 5') > -1);
+        ok('松手存位置', code.indexOf("localStorage.setItem(FAB_KEY") > -1);
+        ok('没拖过就当点击开抽屉', /else\s*\{\s*openSheet\(\);/.test(code));
+        ok('CSS 带 touch-action:none', code.indexOf('touch-action:none') > -1);
+        ok('挂载后恢复上次位置', code.indexOf('restoreFab();') > -1);
+    }
+
+    // ─────────────────────────────────────────────────────────
     console.log('\n[1] mode=inject — 注入装扮页外壳');
     {
         const r = await run({

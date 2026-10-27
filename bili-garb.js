@@ -716,12 +716,13 @@ function overlayMain() {
 
     // ── 样式 ────────────────────────────────────────────────
     var CSS = [
-        '.bg-fab{position:fixed;right:16px;bottom:calc(26px + env(safe-area-inset-bottom,0px));',
+        '.bg-fab{position:fixed;right:16px;bottom:calc(96px + env(safe-area-inset-bottom,0px));',
         'width:52px;height:52px;border-radius:50%;background:#FB7299;border:none;padding:0;margin:0;',
         'display:flex;align-items:center;justify-content:center;cursor:pointer;',
         'box-shadow:0 6px 20px rgba(251,114,153,.42);z-index:2147483646;',
         'transition:transform .15s ease,box-shadow .15s ease;-webkit-tap-highlight-color:transparent}',
         '.bg-fab:active{transform:scale(.92);box-shadow:0 3px 10px rgba(251,114,153,.36)}',
+        '.bg-fab{touch-action:none;user-select:none;-webkit-user-select:none}',
 
         '.bg-mask{position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,.46);',
         'z-index:2147483647;opacity:0;pointer-events:none;transition:opacity .2s ease}',
@@ -1079,6 +1080,91 @@ function overlayMain() {
             .catch(function () { toast('还原失败'); });
     }
 
+    // ── 悬浮按钮拖动 ────────────────────────────────────────
+    // 照 Bili-skin 里 mountLauncher 的做法：
+    //   元素级 touchstart(passive:true) / touchmove(passive:false) / touchend
+    //   按下时先把 right/bottom 换算成 left/top
+    //   位移超过 5px 才算拖，才算 preventDefault
+    //   松手：拖过就存位置，没拖过就当点击
+    var FAB_KEY = 'bili.garb.fabpos';
+    var docDragBound = false;
+    var fabDrag = { sx: 0, sy: 0, ox: 0, oy: 0, moved: false, dragging: false };
+
+    function fabDown(e) {
+        if (!fab) return;
+        var t = e.touches ? e.touches[0] : e;
+        var r = fab.getBoundingClientRect();
+        fabDrag.dragging = true;
+        fabDrag.moved = false;
+        fabDrag.sx = t.clientX;
+        fabDrag.sy = t.clientY;
+        fabDrag.ox = r.left;
+        fabDrag.oy = r.top;
+        // 从 right/bottom 锚定切到 left/top，后面才好直接加减位移
+        fab.style.left = r.left + 'px';
+        fab.style.top = r.top + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+    }
+
+    function fabMove(e) {
+        if (!fabDrag.dragging || !fab) return;
+        var t = e.touches ? e.touches[0] : e;
+        var dx = t.clientX - fabDrag.sx;
+        var dy = t.clientY - fabDrag.sy;
+        if (!fabDrag.moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+        fabDrag.moved = true;
+        if (e.cancelable) e.preventDefault();
+        var w = fab.offsetWidth || 52;
+        var h = fab.offsetHeight || 52;
+        var vw = window.innerWidth || 375;
+        var vh = window.innerHeight || 667;
+        fab.style.left = Math.min(Math.max(fabDrag.ox + dx, 4), vw - w - 4) + 'px';
+        fab.style.top = Math.min(Math.max(fabDrag.oy + dy, 4), vh - h - 4) + 'px';
+    }
+
+    function fabUp() {
+        if (!fabDrag.dragging) return;
+        fabDrag.dragging = false;
+        if (!fab) return;
+        if (fabDrag.moved) {
+            var r = fab.getBoundingClientRect();
+            try {
+                localStorage.setItem(FAB_KEY, JSON.stringify({
+                    left: Math.round(r.left), top: Math.round(r.top)
+                }));
+            } catch (e) { }
+        } else {
+            openSheet();
+        }
+    }
+
+    function bindFabDrag(node) {
+        node.addEventListener('touchstart', fabDown, { passive: true });
+        node.addEventListener('touchmove', fabMove, { passive: false });
+        node.addEventListener('touchend', fabUp);
+        node.addEventListener('mousedown', fabDown);
+        if (!docDragBound) {
+            docDragBound = true;
+            document.addEventListener('mousemove', fabMove);
+            document.addEventListener('mouseup', fabUp);
+        }
+    }
+
+    function restoreFab() {
+        var saved = null;
+        try { saved = JSON.parse(localStorage.getItem(FAB_KEY) || 'null'); } catch (e) { saved = null; }
+        if (!saved || saved.left == null) return;
+        var w = fab.offsetWidth || 52;
+        var h = fab.offsetHeight || 52;
+        var vw = window.innerWidth || 375;
+        var vh = window.innerHeight || 667;
+        fab.style.left = Math.min(Math.max(saved.left, 4), vw - w - 4) + 'px';
+        fab.style.top = Math.min(Math.max(saved.top, 4), vh - h - 4) + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+    }
+
     function mount() {
         if (document.getElementById('bg-root')) return;
 
@@ -1095,7 +1181,7 @@ function overlayMain() {
             '<circle cx="18.2" cy="17.6" r="2.1"/>' +
             '<path d="M5.4 16.4l.9 2.2 2.2.9-2.2.9-.9 2.2-.9-2.2-2.2-.9 2.2-.9z"/>' +
             '</svg>';
-        fab.addEventListener('click', openSheet);
+        bindFabDrag(fab);
 
         mask = el('div', 'bg-mask');
         mask.addEventListener('click', closeSheet);
@@ -1149,6 +1235,7 @@ function overlayMain() {
         root.appendChild(fab);
         root.appendChild(toastEl);
         document.body.appendChild(root);
+        restoreFab();
 
         loadCurrent();
         loadState().then(renderStatus, function () { });
@@ -1158,12 +1245,20 @@ function overlayMain() {
             if (typeof orig !== 'function') return;
             history[k] = function () {
                 var r = orig.apply(this, arguments);
-                setTimeout(function () { loadCurrent(); if (sheet.classList.contains('on')) render(); }, 420);
+                setTimeout(function () {
+                    if (!document.getElementById('bg-root')) mount();
+                    loadCurrent();
+                    if (sheet.classList.contains('on')) render();
+                }, 420);
                 return r;
             };
         });
         window.addEventListener('popstate', function () {
-            setTimeout(function () { loadCurrent(); if (sheet.classList.contains('on')) render(); }, 420);
+            setTimeout(function () {
+                if (!document.getElementById('bg-root')) mount();
+                loadCurrent();
+                if (sheet.classList.contains('on')) render();
+            }, 420);
         });
 
         setInterval(function () {

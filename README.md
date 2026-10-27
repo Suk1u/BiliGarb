@@ -14,7 +14,7 @@
 | `BiliGarb-Debug.sgmodule` | 诊断包，只在抓包时临时启用（见「抓包」一节） |
 | `../docs/bili-garb-coverage.md` | 装扮覆盖情况：哪些做了、哪些做不了、为什么 |
 | `bili-garb.js` | 唯一脚本，靠 `argument=` 分发六种模式 |
-| `test/run.js` | 本地测试台，193 条断言 |
+| `test/run.js` | 本地测试台，217 条断言 |
 | `test/shell.html` | 实抓的装扮 H5 外壳（`mall-h5-major`） |
 | `test/shell-digital.html` | 实抓的收藏集 H5 外壳（`digital-card-next`） |
 | `test/detail-36438.json` | 实抓的套装详情 · 鹿乃桜帆 · `part_id=6` |
@@ -72,7 +72,7 @@ https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 
 点它，底部弹出选择器，分两组：
 
-**装扮 · N** —— 当前页面加载过的所有装扮，带封面、`#item_id`、部件类型（套装 / 个性主题 / 加载动画 / 空间背景 …）。详情页会自动把当前这套排到第一位。
+**装扮 · N** —— 当前页面加载过的所有装扮，带封面、`#item_id`、部件类型（套装 / 个性主题 / 加载动画 / 空间背景 …）。详情页会自动把当前这套排到第一位。每行还有「部件」按钮，可以只取其中一个部件。
 
 **收藏集卡片 · N** —— 当前收藏集里的所有卡，带卡面、`#card_type_id`、稀有度。卡片列表来自卡池详情接口，整池都会列出来。
 
@@ -85,13 +85,41 @@ https://purge.jsdelivr.net/gh/Suk1u/BiliGarb@main/BiliGarb.sgmodule
 
 点某一行右边的「应用」，看到 toast 提示成功，**重开 B站** 生效。
 
-装扮和收藏集是两套互斥状态 —— 应用卡片会顶掉之前应用的装扮，反之亦然。状态栏会写明当前是「（装扮）」还是「（收藏集）」。
+### 混搭
+
+装扮行上还有一个小按钮「**部件**」。点开它会展开五个槽位：
+
+```
+主题   加载动画   头像挂件   空间背景   进度条
+```
+
+点其中一个，**只换那一个槽位**，其他槽位原样保留。所以可以：
+
+- 主题用 A 套、加载动画用 B 套、挂件用 C 套
+- 收藏集卡片的空间背景 + 某套装的主题
+- 资源包灌进来的主题 + 套装自带的挂件
+
+状态栏会显示「已应用 N 个部件」以及每个槽位现在是哪套。收藏集卡片只填空间背景槽，不会顶掉其他部件。
 
 ---
 
 ## 怎么工作的
 
-三层，一个文件，两套数据模型。
+三层，一个文件。状态是**分槽**的：
+
+```
+slots: {
+  skin      个性主题     → resource/show/skin 的 user_equip
+  loading   加载动画     → 同一个响应的 load_equip
+  playicon  进度条       → 同一个响应的 play_icon
+  pendant   头像挂件     → web-interface/card 和 space 系列的 pendant + nickname_color
+  spacebg   空间背景     → space 系列里 image1_* 的分层结构 / SpaceBackgroundInfo 的 {image,animation}
+}
+```
+
+外加一个 `color`（名字颜色），跟主题走不跟挂件走 —— 很多套装没有挂件但有颜色。
+
+旧格式（`kind: suit / card / equip`）读的时候自动迁移，不用手动清。
 
 ```
 装扮 H5 页面 (www.bilibili.com/h5/mall/*)
@@ -344,7 +372,7 @@ https://api.bilibili.com/x/garb/_sg/set-equip?json=<URL 编码后的整份 JSON>
 node test/run.js
 ```
 
-在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 193 条断言：
+在 node 里模拟 Surge 运行时（`$request` / `$response` / `$done` / `$persistentStore` / `$httpClient` 全是桩），跑 217 条断言：
 
 - 两个外壳的注入点位置、HTML 完整性、注入代码语法、无嵌套 `</script>`
 - 非 HTML 响应放行

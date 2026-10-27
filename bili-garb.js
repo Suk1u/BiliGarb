@@ -64,23 +64,27 @@ function req(opts) {
     });
 }
 
-function readState() {
-    try {
-        var s = $persistentStore.read(STORE_KEY);
-        if (!s) return null;
-        var o = JSON.parse(s);
-        if (!o) return null;
-        if (o.kind === 'equip') return o.user_equip ? o : null;
-        if (o.kind === 'card') return o.card ? o : null;
-        return o.detail ? o : null;
-    } catch (e) { return null; }
-}
+/**
+ * 状态模型 v2 —— 分槽。
+ *
+ * 旧版是单一 kind（suit / card / equip），一次只能整套应用。
+ * 新版把可独立替换的部件拆成槽位，可以混搭：
+ *   主题留这套、挂件用那套、加载动画再用第三套。
+ *
+ * slots:
+ *   skin     个性主题      user_equip 块
+ *   loading  加载动画      load_equip 块
+ *   pendant  头像挂件      pendant 对象 + 名字颜色
+ *   spacebg  空间背景      {image, animation}
+ *   playicon 进度条        play_icon 块
+ */
+var SLOTS = ['skin', 'loading', 'pendant', 'spacebg', 'playicon'];
+var SLOT_LABEL = {
+    skin: '主题', loading: '加载动画', pendant: '头像挂件',
+    spacebg: '空间背景', playicon: '进度条'
+};
 
-/** 只要装扮态；收藏集态返回 null */
-function readSuitState() {
-    var s = readState();
-    return (s && s.kind !== 'card' && s.kind !== 'equip' && s.detail) ? s : null;
-}
+function emptyState() { return { v: 2, name: '', slots: {} }; }
 
 function writeState(o) {
     try { $persistentStore.write(JSON.stringify(o), STORE_KEY); } catch (e) {}
@@ -88,6 +92,199 @@ function writeState(o) {
 
 function clearState() {
     try { $persistentStore.write(null, STORE_KEY); } catch (e) {}
+}
+
+/** 读状态，旧格式自动迁移 */
+function readState() {
+    try {
+        var raw = $persistentStore.read(STORE_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (!o) return null;
+        if (o.v === 2 && o.slots) return o;
+        return migrate(o);
+    } catch (e) { return null; }
+}
+
+function countSlots(st) {
+    if (!st || !st.slots) return 0;
+    var n = 0;
+    for (var i = 0; i < SLOTS.length; i++) if (st.slots[SLOTS[i]]) n++;
+    return n;
+}
+
+/** 旧状态（kind: suit / card / equip）→ v2 槽位 */
+function migrate(o) {
+    var st = emptyState();
+    st.name = o.name || '';
+
+    if (o.kind === 'equip') {
+        if (o.user_equip) st.slots.skin = { id: o.id, name: o.name || '', user_equip: o.user_equip };
+        if (o.load_equip) st.slots.loading = { id: o.id, name: o.name || '', load_equip: o.load_equip };
+        if (o.play_icon) st.slots.playicon = { id: o.id, name: o.name || '', icon: o.play_icon };
+        return countSlots(st) ? st : null;
+    }
+
+    if (o.kind === 'card') {
+        var sb = o.card && o.card.space_background;
+        if (!sb) return null;
+        st.slots.spacebg = {
+            id: o.card_type_id, name: o.name || '',
+            image: sb.image || '', animation: sb.animation || null
+        };
+        return st;
+    }
+
+    if (o.detail) {
+        var n = fromDetail(o.detail, o.name);
+        if (o.set_id) n.set_id = String(o.set_id);
+        return countSlots(n) ? n : null;
+    }
+    return null;
+}
+
+// ── 从 suit/detail 的 suit_items 造各个槽位 ──────────────────
+
+function buildUserEquip(it, fallbackName) {
+    var p = (it && it.properties) || {};
+    if (!p.package_url) return null;
+    return {
+        id: it.item_id,
+        name: it.name || fallbackName || '',
+        preview: p.image_cover || p.image_preview || '',
+        ver: Number(p.ver) || Math.floor(Date.now() / 1000),
+        package_url: p.package_url,
+        package_md5: p.package_md5 || '',
+        data: {
+            color: p.color || '#ffffff',
+            color_mode: p.color_mode || 'light',
+            color_second_page: p.color_second_page || '#ffffff',
+            tail_color: p.tail_color || '#e9e9e9',
+            tail_color_selected: p.tail_color_selected || '#ffe556',
+            tail_icon_ani: String(p.tail_icon_ani) === 'true',
+            tail_icon_ani_mode: p.tail_icon_ani_mode || 'once'
+        }
+    };
+}
+
+function buildLoading(it) {
+    var p = (it && it.properties) || {};
+    if (!p.loading_url) return null;
+    return { id: it.item_id, name: it.name || '', ver: Number(p.ver) || 0, loading_url: p.loading_url };
+}
+
+function buildPendant(it) {
+    var p = (it && it.properties) || {};
+    if (!p.image) return null;
+    return {
+        pid: it.item_id,
+        name: it.name || '',
+        image: p.image,
+        expire: 0,
+        image_enhance: p.image_enhance || p.image,
+        image_enhance_frame: p.image_enhance_frame || '',
+        n_pid: it.item_id
+    };
+}
+
+/** 进度条。键名按资源包 _trans.json 里 play_icon 的形状，取不到就给空串。 */
+function buildPlayIcon(it) {
+    var p = (it && it.properties) || {};
+    var mid = p.middle_png || p.image || '';
+    var any = p.drag_left_png || p.drag_right_png || mid || p.squared_image;
+    if (!any) return null;
+    return {
+        drag_left_png: p.drag_left_png || '',
+        drag_right_png: p.drag_right_png || '',
+        middle_png: mid,
+        squared_image: p.squared_image || '',
+        static_icon_image: p.static_icon_image || p.image || '',
+        goods_type: p.goods_type || 'garb',
+        ver: String(p.ver || ''),
+        id: it.item_id
+    };
+}
+
+/**
+ * 空间背景。有两种完全不同的形状：
+ *   装扮套装：分层图 image1_landscape / image1_portrait … image5_*，外加 fan_no_image
+ *   收藏集卡片：{image, animation}
+ * 都收，靠槽位里有没有 layers 区分。
+ */
+function buildSpaceBg(it) {
+    var p = (it && it.properties) || {};
+
+    // 分层形状
+    var layers = {};
+    var n = 0;
+    for (var k in p) {
+        if (/^image\d+_(landscape|portrait)$/.test(k) && p[k]) { layers[k] = p[k]; n++; }
+    }
+    if (p.fan_no_image) { layers.fan_no_image = p.fan_no_image; n++; }
+    if (p.fan_no_color) { layers.fan_no_color = p.fan_no_color; }
+    if (n > 0) return { layers: layers };
+
+    // 单图 / 动图形状
+    var img = p.image || p.image_cover || p.image_preview || '';
+    var anim = (p.animation && typeof p.animation === 'object') ? p.animation : null;
+    if (!anim) {
+        var url = p.animation_url || p.animation_backup_image || '';
+        if (url) {
+            anim = {
+                animation_url: p.animation_url || '',
+                animation_backup_image: p.animation_backup_image || p.image || '',
+                animation_first_frame: p.animation_first_frame || p.image || '',
+                duration: p.duration || 0,
+                is_mute: p.is_mute !== undefined ? p.is_mute : true
+            };
+        }
+    }
+    if (!img && !anim) return null;
+    return { image: img, animation: anim };
+}
+
+/** 从 detail 造完整槽位集 */
+function fromDetail(detail, fallbackName) {
+    var st = emptyState();
+    var items = (detail && detail.suit_items) || {};
+    var name = (detail && detail.name) || fallbackName || '';
+    st.name = name;
+
+    var sk = firstPart(items.skin);
+    var ue = buildUserEquip(sk, name);
+    if (ue) st.slots.skin = { id: sk.item_id, name: sk.name || name, user_equip: ue };
+
+    var ld = buildLoading(firstPart(items.loading));
+    if (ld) st.slots.loading = { id: ld.id, name: ld.name || name, load_equip: ld };
+
+    // 名字颜色跟主题走，不跟挂件走 —— 没有挂件的套装也常常有颜色
+    st.color = (sk && sk.properties && sk.properties.color) || '';
+
+    var pd = buildPendant(firstPart(items.pendant));
+    if (pd) st.slots.pendant = { id: pd.pid, name: pd.name || name, pendant: pd };
+
+    var pi = buildPlayIcon(firstPart(items.play_icon));
+    if (pi) st.slots.playicon = { id: pi.id, name: name, icon: pi };
+
+    var sbi = firstPart(items.space_bg);
+    var sbg = buildSpaceBg(sbi);
+    if (sbg) {
+        st.slots.spacebg = {
+            id: sbi && sbi.item_id,
+            name: (sbi && sbi.name) || name,
+            image: sbg.image || '',
+            animation: sbg.animation || null,
+            layers: sbg.layers || null
+        };
+    }
+
+    return st;
+}
+
+/** 把 src 的某个槽位搬进 dst */
+function copySlot(dst, src, slot) {
+    if (src && src.slots && src.slots[slot]) dst.slots[slot] = src.slots[slot];
+    else delete dst.slots[slot];
 }
 
 // ── 纯 JS MD5（Surge 的 JS 引擎没有 crypto） ─────────────────
@@ -568,6 +765,13 @@ function overlayMain() {
         'background:#FB7299;color:#fff;font-size:12.5px;cursor:pointer}',
         '.bg-apply:active{opacity:.8}',
         '.bg-apply.done{background:#eef0f3;color:#9499a0}',
+        '.bg-more{flex:0 0 auto;border:none;border-radius:14px;padding:6px 10px;',
+        'background:#eef0f3;color:#61666d;font-size:12px;cursor:pointer;margin-left:-6px}',
+        '.bg-more:active{opacity:.7}',
+        '.bg-slotbar{display:flex;flex-wrap:wrap;gap:6px;padding:2px 6px 10px 64px}',
+        '.bg-slotbtn{border:1px solid #e3e5e7;background:#fff;color:#61666d;',
+        'border-radius:12px;padding:5px 12px;font-size:12px;cursor:pointer}',
+        '.bg-slotbtn:active{background:#fff1f5;border-color:#FB7299;color:#d63f68}',
 
         '.bg-empty{padding:22px 10px;text-align:center;color:#9499a0;font-size:12.5px}',
 
@@ -607,6 +811,8 @@ function overlayMain() {
         '.bg-input:focus{background:#232428}',
         '.bg-reset{background:#2a2b2f;border-color:#3a3b40;color:#b0b4ba}',
         '.bg-apply.done{background:#2a2b2f;color:#787c85}',
+        '.bg-more{background:#2a2b2f;color:#b0b4ba}',
+        '.bg-slotbtn{background:#232428;border-color:#3a3b40;color:#b0b4ba}',
         '}'
     ].join('');
 
@@ -634,30 +840,59 @@ function overlayMain() {
         10: '加载动画', 11: '进度条', 12: '开屏画面', 13: '头像'
     };
 
+    // 和桥接层的 SLOTS / SLOT_LABEL 保持一致
+    var SLOT_ORDER = ['skin', 'loading', 'pendant', 'spacebg', 'playicon'];
+    var SLOT_LABEL = {
+        skin: '主题', loading: '加载动画', pendant: '头像挂件',
+        spacebg: '空间背景', playicon: '进度条'
+    };
+
     function renderStatus() {
         if (!statusEl) return;
-        if (applied && state && state.name) {
+        var n = state && state.count ? state.count : 0;
+        if (applied && n > 0) {
+            var names = [];
+            for (var k in (state.slots || {})) {
+                names.push(SLOT_LABEL[k] + '：' + (state.slots[k] || ''));
+            }
             statusEl.className = 'bg-status';
-            statusEl.textContent = '当前应用：' + state.name +
-                (state.kind === 'card' ? '（收藏集卡片）'
-                    : (state.kind === 'equip' ? '（收藏集主题）' : '（装扮）'));
+            statusEl.textContent = '已应用 ' + n + ' 个部件 · ' + names.join('｜');
         } else {
             statusEl.className = 'bg-status off';
             statusEl.textContent = '未应用任何装扮 · 点下方任一行开始';
         }
     }
 
-    function curKey() {
-        if (!applied || !state) return '';
-        if (state.set_id) return 'set:' + state.set_id;
-        if (state.kind === 'equip') return 'equip:' + state.id;
-        if (state.kind === 'card') return 'card:' + state.card_type_id;
-        return 'suit:' + state.item_id;
+    /** 这一行是否已经在用（任一槽位 id 命中即算） */
+    function isInUse(item) {
+        if (!state || !state.slots) return false;
+        for (var k in state.slots) {
+            var sl = state.slots[k];
+            if (sl && String(sl.id) === String(item.id)) return true;
+        }
+        return false;
+    }
+
+    function toggleSlots(rowEl, item) {
+        var next = rowEl.nextSibling;
+        if (next && next.className && next.className.indexOf('bg-slotbar') === 0) {
+            next.parentNode.removeChild(next);
+            return;
+        }
+        var bar = el('div', 'bg-slotbar');
+        SLOT_ORDER.forEach(function (sl) {
+            var b = el('button', 'bg-slotbtn', SLOT_LABEL[sl]);
+            b.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                applyPart(item, sl);
+            });
+            bar.appendChild(b);
+        });
+        rowEl.parentNode.insertBefore(bar, rowEl.nextSibling);
     }
 
     function row(item) {
-        var key = item.kind + ':' + item.id;
-        var isCur = curKey() === key;
+        var isCur = isInUse(item);
 
         var r = el('div', 'bg-row' + (isCur ? ' cur' : ''));
 
@@ -688,6 +923,15 @@ function overlayMain() {
         sub.appendChild(document.createTextNode(tail));
         meta.appendChild(sub);
         r.appendChild(meta);
+
+        if (item.kind === 'suit') {
+            var more = el('button', 'bg-more', '部件');
+            more.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                toggleSlots(r, item);
+            });
+            r.appendChild(more);
+        }
 
         var btn = el('button', 'bg-apply' + (isCur ? ' done' : ''), isCur ? '使用中' : '应用');
         btn.addEventListener('click', function (ev) {
@@ -755,13 +999,28 @@ function overlayMain() {
 
     function afterApply(j, fallbackName) {
         if (j && j.code === 0) {
-            state = j.data || null;
-            applied = !!state;
-            toast('已应用：' + ((state && state.name) || fallbackName) + '　重开 B站 生效');
-        } else {
-            toast('失败：' + ((j && j.message) || '未知错误'));
+            toast('已应用：' + fallbackName + '　重开 B站 生效');
+            return loadState().then(render, render);
         }
+        toast('失败：' + ((j && j.message) || '未知错误'));
         render();
+    }
+
+    /** 只应用一个部件，其余槽位保留 */
+    function applyPart(item, slot) {
+        if (!_fetch) { toast('当前环境不支持请求'); return; }
+        toast('应用中…');
+        _fetch(SG + '/apply-part?item_id=' + encodeURIComponent(item.id) +
+            '&slot=' + encodeURIComponent(slot), { credentials: 'include' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j && j.code === 0 && j.data) {
+                    afterApply(j, (j.data.label || SLOT_LABEL[slot] || slot) + ' · ' + item.name);
+                } else {
+                    toast('失败：' + ((j && j.message) || '未知错误'));
+                }
+            })
+            .catch(function (e) { toast('失败：' + (e && e.message ? e.message : e)); });
     }
 
     function applySuit(item) {
@@ -1006,7 +1265,7 @@ function doBridgeApplySuit(url) {
             }
 
             var d = j.data;
-            writeState({ kind: 'suit', item_id: d.item_id, name: d.name, detail: d, at: Date.now() });
+            writeState(fromDetail(d, d.name));
 
             var items = d.suit_items || {};
             var sk = firstPart(items.skin);
@@ -1066,16 +1325,19 @@ function doBridgeApplyCard(url) {
             var info = pickCard(j.data, cardTypeId);
             if (!info) return bridgeReply({ code: -1, message: '该卡池里没有这张卡' });
 
-            writeState({
-                kind: 'card',
-                act_id: Number(actId) || actId,
-                lottery_id: Number(o.lot) || o.lot,
-                card_type_id: info.id,
-                name: info.name || ('卡 #' + info.id),
-                act_title: j.data.name || '',
-                card: info,
-                at: Date.now()
-            });
+            // 只换空间背景这一个槽，其他槽位保留 —— 这样卡片可以和装扮混搭
+            var cur = readState() || emptyState();
+            var sb = info.space_background;
+            if (sb) {
+                cur.slots.spacebg = {
+                    id: info.id,
+                    name: info.name || ('卡 #' + info.id),
+                    image: sb.image || '',
+                    animation: sb.animation || null
+                };
+            }
+            cur.name = info.name || cur.name;
+            writeState(cur);
 
             bridgeReply({
                 code: 0,
@@ -1290,16 +1552,9 @@ function doBridgeApplySet(url) {
             suit_items: items
         };
 
-        writeState({
-            kind: 'suit',
-            set_id: String(collectId),
-            item_id: detail.item_id,
-            name: detail.name,
-            detail: detail,
-            act_id: Number(actId) || actId,
-            lottery_id: Number(lotId) || lotId,
-            at: Date.now()
-        });
+        var ns = fromDetail(detail, hitName);
+        ns.set_id = String(collectId);
+        writeState(ns);
 
         bridgeReply({
             code: 0,
@@ -1339,19 +1594,13 @@ function doBridgeStoreSuit() {
 
     var name = p.name || p.detail.name || ('套装 #' + p.item_id);
 
-    writeState({
-        kind: 'suit',
-        set_id: p.set_id ? String(p.set_id) : '',
+    var ns = fromDetail({
         item_id: Number(p.item_id) || 0,
         name: name,
-        detail: {
-            item_id: Number(p.item_id) || 0,
-            name: name,
-            suit_items: p.detail.suit_items
-        },
-        source: 'internal',
-        at: Date.now()
-    });
+        suit_items: p.detail.suit_items
+    }, name);
+    if (p.set_id) ns.set_id = String(p.set_id);
+    writeState(ns);
 
     var sk = firstPart(p.detail.suit_items.skin);
     bridgeReply({
@@ -1388,16 +1637,18 @@ function doBridgeSetEquip(url) {
         return bridgeReply({ code: -1, message: '缺 user_equip.id 或 package_url' });
     }
 
-    var st = {
-        kind: 'equip',
-        id: ue.id,
-        name: ue.name || ('主题 #' + ue.id),
-        user_equip: ue,
-        load_equip: p.load_equip || null,
-        play_icon: p.play_icon || null,
-        at: Date.now()
-    };
-    writeState(st);
+    var nm = ue.name || ('主题 #' + ue.id);
+    var cur = readState() || emptyState();
+    cur.slots.skin = { id: ue.id, name: nm, user_equip: ue };
+    if (p.load_equip) {
+        cur.slots.loading = { id: p.load_equip.id || ue.id, name: p.load_equip.name || nm, load_equip: p.load_equip };
+    }
+    if (p.play_icon) {
+        cur.slots.playicon = { id: p.play_icon.id || ue.id, name: nm, icon: p.play_icon };
+    }
+    cur.name = nm;
+    writeState(cur);
+    var st = { name: nm, load_equip: p.load_equip || null, play_icon: p.play_icon || null };
 
     bridgeReply({
         code: 0,
@@ -1409,6 +1660,52 @@ function doBridgeSetEquip(url) {
             has_play_icon: !!st.play_icon
         }
     });
+}
+
+/** 只应用某套装里的一个部件，其余槽位保留 —— 混搭的关键 */
+function doBridgeApplyPart(url) {
+    var id = queryOf(url, 'item_id');
+    var slot = queryOf(url, 'slot');
+    if (!id) return bridgeReply({ code: -1, message: 'missing item_id' });
+    if (SLOTS.indexOf(slot) < 0) return bridgeReply({ code: -1, message: 'bad slot' });
+
+    req({ url: 'https://api.bilibili.com/x/garb/v2/mall/suit/detail?item_id=' + id })
+        .then(function (r) {
+            var j;
+            try { j = JSON.parse(r.data); } catch (e) {
+                return bridgeReply({ code: -1, message: 'detail 解析失败' });
+            }
+            if (!j || j.code !== 0 || !j.data) {
+                return bridgeReply({ code: (j && j.code) || -1, message: (j && j.message) || 'detail 请求失败' });
+            }
+
+            var full = fromDetail(j.data, j.data.name);
+            var picked = full.slots[slot];
+            if (!picked) {
+                return bridgeReply({
+                    code: -1,
+                    message: '这套没有' + (SLOT_LABEL[slot] || slot)
+                });
+            }
+
+            var cur = readState() || emptyState();
+            cur.slots[slot] = picked;
+            cur.name = picked.name || full.name || cur.name;
+            writeState(cur);
+
+            bridgeReply({
+                code: 0,
+                data: {
+                    slot: slot,
+                    label: SLOT_LABEL[slot] || slot,
+                    name: picked.name || '',
+                    count: countSlots(cur)
+                }
+            });
+        })
+        .catch(function (e) {
+            bridgeReply({ code: -1, message: String(e && e.message ? e.message : e) });
+        });
 }
 
 function doBridge() {
@@ -1427,13 +1724,19 @@ function doBridge() {
     if (path === '/x/garb/_sg/state') {
         var st = readState();
         if (!st) return bridgeReply({ code: 0, data: null });
+        var slots = {};
+        for (var i = 0; i < SLOTS.length; i++) {
+            var k = SLOTS[i];
+            if (st.slots && st.slots[k]) slots[k] = st.slots[k].name || '';
+        }
         return bridgeReply({
             code: 0,
-            data: st.kind === 'card'
-                ? { kind: 'card', card_type_id: st.card_type_id, name: st.name }
-                : (st.kind === 'equip'
-                    ? { kind: 'equip', id: st.id, name: st.name }
-                    : { kind: 'suit', item_id: st.item_id, name: st.name, set_id: st.set_id || '' })
+            data: {
+                name: st.name || '',
+                set_id: st.set_id || '',
+                count: countSlots(st),
+                slots: slots
+            }
         });
     }
 
@@ -1476,6 +1779,7 @@ function doBridge() {
 
     if (path === '/x/garb/_sg/set-equip') return doBridgeSetEquip(url);
     if (path === '/x/garb/_sg/store-suit') return doBridgeStoreSuit();
+    if (path === '/x/garb/_sg/apply-part') return doBridgeApplyPart(url);
     if (path === '/x/garb/_sg/apply-card') return doBridgeApplyCard(url);
     if (path === '/x/garb/_sg/apply-set') return doBridgeApplySet(url);
     if (path === '/x/garb/_sg/apply') return doBridgeApplySuit(url);
@@ -1484,104 +1788,33 @@ function doBridge() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// §4  mode=spoof-skin
+// §4 / §5 / §6 / §7  伪装层 —— 全部按槽位取值
 // ─────────────────────────────────────────────────────────────
 
+/** 主题 / 加载动画 / 进度条：都挂在 resource/show/skin 上 */
 function doSpoofSkin() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var any = readState();
-    if (!any) return finish({});
+    var st = readState();
+    if (!st || !st.slots) return finish({});
 
     var body;
     try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
     if (!body || !body.data) return finish({});
 
-    // 收藏集主题套装：直接套用现成的 user_equip 块（来自资源包）
-    if (any.kind === 'equip') {
-        var hit = false;
-        if (any.user_equip) { body.data.user_equip = any.user_equip; hit = true; }
-        if (any.load_equip) { body.data.load_equip = any.load_equip; hit = true; }
-        // 进度条（播放器里的拖动条）。show/skin 未必有这个键，
-        // 但 ObjC 的 JSON 模型会忽略未知键，多塞一个不会出事。
-        if (any.play_icon) { body.data.play_icon = any.play_icon; hit = true; }
-        if (!hit) return finish({});
-        return finish({ body: JSON.stringify(body) });
-    }
+    var hit = false;
+    var s1 = st.slots.skin, s2 = st.slots.loading, s3 = st.slots.playicon;
 
-    var st = readSuitState();
-    if (!st) return finish({});
+    if (s1 && s1.user_equip) { body.data.user_equip = s1.user_equip; hit = true; }
+    if (s2 && s2.load_equip) { body.data.load_equip = s2.load_equip; hit = true; }
+    // show/skin 未必有 play_icon 这个键，但 ObjC 的 JSON 模型会忽略未知键
+    if (s3 && s3.icon) { body.data.play_icon = s3.icon; hit = true; }
 
-    var items = (st.detail && st.detail.suit_items) || {};
-    var sk = firstPart(items.skin);
-    var ld = firstPart(items.loading);
-    var changed = false;
-
-    if (sk && sk.properties) {
-        var p = sk.properties;
-        if (p.package_url) {
-            body.data.user_equip = {
-                id: sk.item_id,
-                name: st.detail.name || st.name || '',
-                preview: p.image_cover || p.image_preview || '',
-                ver: Number(p.ver) || Math.floor(Date.now() / 1000),
-                package_url: p.package_url,
-                package_md5: p.package_md5 || '',
-                data: {
-                    color: p.color || '#ffffff',
-                    color_mode: p.color_mode || 'light',
-                    color_second_page: p.color_second_page || '#ffffff',
-                    tail_color: p.tail_color || '#e9e9e9',
-                    tail_color_selected: p.tail_color_selected || '#ffe556',
-                    tail_icon_ani: String(p.tail_icon_ani) === 'true',
-                    tail_icon_ani_mode: p.tail_icon_ani_mode || 'once'
-                }
-            };
-            changed = true;
-        }
-    }
-
-    if (ld && ld.properties && ld.properties.loading_url) {
-        var q = ld.properties;
-        body.data.load_equip = {
-            id: ld.item_id,
-            name: ld.name || '',
-            ver: Number(q.ver) || 0,
-            loading_url: q.loading_url
-        };
-        changed = true;
-    }
-
-    if (!changed) return finish({});
+    if (!hit) return finish({});
     finish({ body: JSON.stringify(body) });
 }
 
-// ─────────────────────────────────────────────────────────────
-// §5 / §6  名片与空间页的按名覆盖
-// ─────────────────────────────────────────────────────────────
-
-function spoofParts(st) {
-    var items = (st.detail && st.detail.suit_items) || {};
-    var out = { pendant: null, color: '' };
-
-    var pd = firstPart(items.pendant);
-    if (pd && pd.properties && pd.properties.image) {
-        out.pendant = {
-            pid: pd.item_id,
-            name: pd.name || '',
-            image: pd.properties.image,
-            expire: 0,
-            image_enhance: pd.properties.image_enhance || pd.properties.image,
-            image_enhance_frame: pd.properties.image_enhance_frame || '',
-            n_pid: pd.item_id
-        };
-    }
-
-    var sk = firstPart(items.skin);
-    if (sk && sk.properties && sk.properties.color) out.color = sk.properties.color;
-    return out;
-}
-
+/** 只改自己的，别人的名片原样放过 */
 function isSelf(obj) {
     var uid = selfUid();
     if (!uid) return true;
@@ -1590,11 +1823,15 @@ function isSelf(obj) {
     return String(mid) === String(uid);
 }
 
+/** 名片：挂件 + 名字颜色 */
 function doSpoofCard() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var st = readSuitState();
+    var st = readState();
     if (!st) return finish({});
+    var pd = st.slots && st.slots.pendant;
+    var color = st.color || '';
+    if (!pd && !color) return finish({});
 
     var body;
     try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
@@ -1603,80 +1840,98 @@ function doSpoofCard() {
     var card = body.data.card;
     if (!isSelf(card)) return finish({});
 
-    var parts = spoofParts(st);
-    var changed = false;
+    var hit = false;
+    if (pd && pd.pendant) { card.pendant = pd.pendant; hit = true; }
+    if (color) { card.nickname_color = color; hit = true; }
 
-    if (parts.pendant) { card.pendant = parts.pendant; changed = true; }
-    if (parts.color) { card.nickname_color = parts.color; changed = true; }
-
-    if (!changed) return finish({});
+    if (!hit) return finish({});
     finish({ body: JSON.stringify(body) });
 }
 
+/** 空间页：按名覆盖 pendant / nickname_color，认不出的键原样放过 */
 function doSpoofSpace() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
-    var st = readSuitState();
+    var st = readState();
     if (!st) return finish({});
+    var pd = st.slots && st.slots.pendant;
+    var color = st.color || '';
+    var sbg = st.slots && st.slots.spacebg;
+    var layers = (sbg && sbg.layers) ? sbg.layers : null;
+    if (!pd && !color && !layers) return finish({});
 
     var body;
     try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
     if (!body || !body.data) return finish({});
 
-    var parts = spoofParts(st);
-    if (!parts.pendant && !parts.color) return finish({});
-
-    var changed = false;
+    var hit = false;
     walkObject(body.data, function (o) {
         if (!isSelf(o)) return;
-        if (parts.pendant && o.pendant && typeof o.pendant === 'object' && !Array.isArray(o.pendant)) {
-            o.pendant = parts.pendant;
-            changed = true;
+        if (pd && pd.pendant && o.pendant && typeof o.pendant === 'object' && !Array.isArray(o.pendant)) {
+            o.pendant = pd.pendant;
+            hit = true;
         }
-        if (parts.color && typeof o.nickname_color === 'string' && o.nickname_color) {
-            o.nickname_color = parts.color;
-            changed = true;
+        if (color && typeof o.nickname_color === 'string' && o.nickname_color) {
+            o.nickname_color = color;
+            hit = true;
+        }
+        // 分层空间背景：认 image1_* 这个结构签名
+        if (layers && (typeof o.image1_landscape === 'string' || typeof o.image1_portrait === 'string')) {
+            for (var k in layers) if (layers[k]) o[k] = layers[k];
+            hit = true;
         }
     }, 0);
 
-    if (!changed) return finish({});
+    if (!hit) return finish({});
     finish({ body: JSON.stringify(body) });
 }
 
-// ─────────────────────────────────────────────────────────────
-// §7  mode=spoof-spacebg —— 收藏集卡片的空间背景
-// ─────────────────────────────────────────────────────────────
-
+/** 空间背景：按结构签名替换，认不出就整包放行 */
 function doSpoofSpaceBg() {
     if (typeof $response === 'undefined' || !$response.body) return finish({});
 
     var st = readState();
-    if (!st || st.kind !== 'card' || !st.card) return finish({});
-
-    var sb = st.card.space_background;
-    if (!looksLikeSpaceBg(sb)) return finish({});
+    var sbg = st && st.slots && st.slots.spacebg;
+    if (!sbg) return finish({});
+    if (!sbg.layers && !sbg.image && !looksLikeSpaceBg(sbg)) return finish({});
 
     var body;
     try { body = JSON.parse($response.body); } catch (e) { return finish({}); }
     if (!body || !body.data || typeof body.data !== 'object') return finish({});
 
-    var changed = false;
+    var hit = false;
+
+    // 分层形状：响应里出现 image1_* 就当是空间背景，按层覆盖
+    if (sbg.layers) {
+        walkObject(body.data, function (o) {
+            if (typeof o.image1_landscape !== 'string' && typeof o.image1_portrait !== 'string') return;
+            for (var k in sbg.layers) {
+                if (sbg.layers[k]) o[k] = sbg.layers[k];
+            }
+            hit = true;
+        }, 0);
+        if (!hit) return finish({});
+        return finish({ body: JSON.stringify(body) });
+    }
+
+    // 单图 / 动图形状
+    function apply(o) {
+        if (sbg.animation) o.animation = sbg.animation;
+        if (sbg.image) o.image = sbg.image;
+        else if (o.image === undefined) o.image = null;
+        hit = true;
+    }
 
     if (looksLikeSpaceBg(body.data)) {
-        // 顶层就是背景本体
-        body.data.image = sb.image || body.data.image || null;
-        body.data.animation = sb.animation;
-        changed = true;
+        apply(body.data);
     } else {
         walkObject(body.data, function (o) {
             if (!looksLikeSpaceBg(o)) return;
-            o.image = sb.image || o.image || null;
-            o.animation = sb.animation;
-            changed = true;
+            apply(o);
         }, 0);
     }
 
-    if (!changed) return finish({});
+    if (!hit) return finish({});
     finish({ body: JSON.stringify(body) });
 }
 

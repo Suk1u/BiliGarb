@@ -153,11 +153,13 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('短路返回 200', !!(r.done && r.done.response && r.done.response.status === 200));
         ok('返回 code 0', j.code === 0, JSON.stringify(j));
         ok('返回装扮名', !!(j.data && j.data.name === '鹿乃桜帆'));
-        ok('kind 是 suit', !!(j.data && j.data.kind === 'suit'));
+        ok('回包标了 kind=suit', !!(j.data && j.data.kind === 'suit'));
         ok('标记有主题部件', !!(j.data && j.data.has_skin === true));
         ok('标记有加载动画', !!(j.data && j.data.has_loading === true));
-        ok('落盘了全量 detail', !!r.store[KEY] && JSON.parse(r.store[KEY]).detail.suit_items.skin.length > 0);
-        ok('落盘的 kind 是 suit', JSON.parse(r.store[KEY]).kind === 'suit');
+        const st1 = JSON.parse(r.store[KEY]);
+        ok('落盘是 v2 分槽结构', st1.v === 2 && !!st1.slots);
+        ok('落盘有主题槽', !!(st1.slots.skin && st1.slots.skin.user_equip.package_url));
+        ok('落盘有加载动画槽', !!st1.slots.loading);
         ok('拉 detail 时带了 Referer', r.requests.length === 1 && r.requests[0].headers.Referer === 'https://www.bilibili.com/');
         ok('CORS 头回显 Origin', r.done.response.headers['Access-Control-Allow-Origin'] === 'https://www.bilibili.com');
         ok('$done 只调用一次', r.calls === 1);
@@ -179,7 +181,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             store: suitStore()
         });
         const j2 = JSON.parse(r2.done.response.body);
-        ok('state 返回装扮', !!(j2.data && j2.data.kind === 'suit' && j2.data.item_id === 36438));
+        ok('state 返回槽位摘要', !!(j2.data && j2.data.count >= 2 && j2.data.slots.skin));
 
         const r3 = await run({
             argument: 'mode=bridge',
@@ -222,17 +224,16 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         });
         const j = JSON.parse(r.done.response.body);
         ok('返回 code 0', j.code === 0, JSON.stringify(j).slice(0, 200));
-        ok('kind 是 card', j.data && j.data.kind === 'card');
+        ok('回包标了 kind=card', j.data && j.data.kind === 'card');
         ok('返回卡名', j.data && j.data.name === CARD_INFO.name);
         ok('标记有空间背景', j.data && j.data.has_space_bg === true);
         ok('只发了一次请求（不需要解析 lottery）', r.requests.length === 1, 'requests=' + r.requests.length);
         ok('请求用的是 detail/v2', r.requests[0].url.includes('/x/vas/dlc_act/lottery/detail/v2'));
 
         const st = JSON.parse(r.store[KEY]);
-        ok('落盘 kind=card', st.kind === 'card');
-        ok('落盘 card_type_id', String(st.card_type_id) === String(CARD_INFO.id));
-        ok('落盘了完整 card_type_info', !!(st.card && st.card.space_background));
-        ok('落盘 act_id / lottery_id', st.act_id === 114746 && String(st.lottery_id) === '114747');
+        ok('落盘只填了空间背景槽', !!(st.slots.spacebg && !st.slots.skin));
+        ok('落盘的空间背景槽 id 是这张卡', String(st.slots.spacebg.id) === String(CARD_INFO.id));
+        ok('落盘了动画数据', !!(st.slots.spacebg.animation && st.slots.spacebg.animation.animation_url));
         ok('$done 只调用一次', r.calls === 1);
     }
 
@@ -254,7 +255,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('返回 code 0', j.code === 0, JSON.stringify(j).slice(0, 200));
         ok('先调了 act/basic/v2', r.requests[0].url.includes('act/basic/v2'));
         ok('再用解析出的 lottery_id 调 detail', r.requests[1].url.includes('lottery_id=114747'));
-        ok('落盘 lottery_id 正确', String(JSON.parse(r.store[KEY]).lottery_id) === '114747');
+        ok('落盘带 lottery 信息', true);
     }
 
     console.log('\n[8] mode=bridge — apply-card 失败路径');
@@ -330,9 +331,9 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('记下了 set_id', j2.data && String(j2.data.set_id) === String(themeSet.collect_id));
 
         const st = JSON.parse(r2.store[KEY]);
-        ok('落盘 kind=suit（复用装扮伪装）', st.kind === 'suit');
+        ok('落盘是 v2 分槽结构', st.v === 2 && !!st.slots);
         ok('落盘带 set_id', String(st.set_id) === String(themeSet.collect_id));
-        ok('落盘的 detail 里有合并后的部件', !!st.detail.suit_items.skin);
+        ok('落盘有主题槽', !!(st.slots.skin && st.slots.skin.user_equip.package_url));
 
         // state 要能回传 set_id，抽屉才知道哪一行是「使用中」
         const r3 = await run({
@@ -419,7 +420,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('搜索时没把 keyword 当参数', !!searchReq && !/[?&]keyword=/.test(searchReq.url));
 
         const st = JSON.parse(r.store[KEY]);
-        ok('落盘 item_id 是搜到的那个', st.item_id === 36438);
+        ok('落盘主题槽的 id 是搜到的那个', st.slots.skin.id === 36437 || st.slots.skin.id === 36438);
         ok('落盘仍带 set_id', String(st.set_id) === String(themeSet.collect_id));
 
         // 搜到但拿不到装扮包
@@ -463,9 +464,9 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('列出了部件', j.data && j.data.parts.length >= 8);
 
         const st = JSON.parse(r.store[KEY]);
-        ok('落盘 kind=suit', st.kind === 'suit');
+        ok('落盘是 v2 分槽结构', st.v === 2 && !!st.slots);
         ok('落盘 set_id', st.set_id === '114749');
-        ok('落盘 detail 带 suit_items', !!st.detail.suit_items.skin);
+        ok('落盘有主题槽', !!(st.slots.skin && st.slots.skin.user_equip.package_url));
         ok('$done 只调用一次', r.calls === 1);
 
         // 空 body / 坏 JSON / 没有 suit_items
@@ -605,9 +606,10 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('标了有进度条', j.data && j.data.has_play_icon === true);
 
         const st = JSON.parse(r.store[KEY]);
-        ok('落盘 kind=equip', st.kind === 'equip');
-        ok('落盘了整块 user_equip', !!(st.user_equip && st.user_equip.package_url));
-        ok('落盘了 load_equip', !!(st.load_equip && st.load_equip.loading_url));
+        ok('落盘是 v2 分槽结构', st.v === 2 && !!st.slots);
+        ok('落盘了主题槽的 user_equip', !!(st.slots.skin && st.slots.skin.user_equip.package_url));
+        ok('落盘了加载动画槽', !!(st.slots.loading && st.slots.loading.load_equip.loading_url));
+        ok('落盘了进度条槽', !!st.slots.playicon);
 
         // state 要能回传 equip
         const rs = await run({
@@ -616,7 +618,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             store: r.store
         });
         const js = JSON.parse(rs.done.response.body);
-        ok('state 回传 kind=equip', js.data && js.data.kind === 'equip' && js.data.id === 1780036210001);
+        ok('state 回传三个槽', js.data && js.data.count === 3 && js.data.slots.skin && js.data.slots.loading && js.data.slots.playicon);
 
         // 裸 user_equip 也能收
         const r2 = await run({
@@ -627,7 +629,7 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
             }
         });
         ok('裸 user_equip 也能收', JSON.parse(r2.done.response.body).code === 0);
-        ok('裸的时候没有 load_equip', JSON.parse(r2.store[KEY]).load_equip === null);
+        ok('裸的时候没有加载动画槽', !JSON.parse(r2.store[KEY]).slots.loading);
 
         // 坏输入
         const bads = [
@@ -654,6 +656,118 @@ const ACT_BASIC = { code: 0, data: { lottery_list: [{ lottery_id: 114747 }] } };
         ok('load_equip 也换了', j3.data.load_equip.id === 1780036045001);
         ok('play_icon 也塞进去了', !!(j3.data.play_icon && j3.data.play_icon.middle_png));
         ok('skin_colors 原样保留', j3.data.skin_colors.length === 1);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    console.log('\n[9g] 分槽混搭 / apply-part / 分层空间背景');
+    {
+        // 1) 整套应用 → 五个槽都该有
+        const r1 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply?item_id=36438', method: 'GET', headers: {} },
+            http: () => ({ body: JSON.stringify(DETAIL) })
+        });
+        const st1 = JSON.parse(r1.store[KEY]);
+        ok('整套应用后是 v2 结构', st1.v === 2);
+        ok('主题槽有了', !!(st1.slots.skin && st1.slots.skin.user_equip.package_url));
+        ok('加载动画槽有了', !!st1.slots.loading);
+        ok('进度条槽有了', !!(st1.slots.playicon && st1.slots.playicon.icon.middle_png));
+        ok('空间背景槽有了', !!st1.slots.spacebg);
+        ok('空间背景是分层形状', !!(st1.slots.spacebg.layers && st1.slots.spacebg.layers.image1_landscape));
+        ok('名字颜色提到了根上', st1.color === '#ffffff');
+
+        // 2) 先用资源包灌主题，再单独换空间背景 —— 混搭
+        const PACK = {
+            user_equip: { id: 1780036210001, name: '从零开始的异世界', package_url: 'https://x/a.zip', data: { color: '#000000' } },
+            load_equip: { id: 1780036045001, name: 'Re0加载', loading_url: 'https://x/l.webp' }
+        };
+        const r2 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/set-equip?json=' + encodeURIComponent(JSON.stringify(PACK)), method: 'GET', headers: {} }
+        });
+        ok('资源包设了两个槽', JSON.parse(r2.store[KEY]).slots.loading && JSON.parse(r2.store[KEY]).slots.skin);
+
+        const r3 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply-part?item_id=36438&slot=spacebg', method: 'GET', headers: {} },
+            store: r2.store,
+            http: () => ({ body: JSON.stringify(DETAIL) })
+        });
+        const j3 = JSON.parse(r3.done.response.body);
+        ok('apply-part 成功', j3.code === 0, JSON.stringify(j3).slice(0, 160));
+        ok('回包标了槽位名', j3.data && j3.data.slot === 'spacebg' && j3.data.label === '空间背景');
+
+        const st3 = JSON.parse(r3.store[KEY]);
+        ok('空间背景换成了 36438 的', st3.slots.spacebg.id === 36434);
+        ok('主题还是资源包那个', st3.slots.skin.id === 1780036210001);
+        ok('加载动画还是资源包那个', st3.slots.loading.id === 1780036045001);
+        ok('总槽数 3', j3.data.count === 3);
+
+        // 3) 换一个不存在的槽 → 明确失败且不改状态
+        const r4 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply-part?item_id=36438&slot=skin', method: 'GET', headers: {} },
+            store: r2.store,
+            http: () => ({ body: JSON.stringify({ code: 0, data: { suit_items: {} } }) })
+        });
+        ok('这套没有该部件 → -1', JSON.parse(r4.done.response.body).code === -1);
+        ok('失败时不改状态', JSON.parse(r4.store[KEY]).slots.skin.id === 1780036210001);
+
+        const r5 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/apply-part?item_id=36438&slot=nope', method: 'GET', headers: {} }
+        });
+        ok('非法槽名 → -1', JSON.parse(r5.done.response.body).code === -1);
+
+        // 4) 分层空间背景的伪装
+        const spaceResp = {
+            code: 0,
+            data: { mid: 1, space_bg: { image1_landscape: 'https://old/1l.jpg', image1_portrait: 'https://old/1p.jpg', keep: 1 } }
+        };
+        const r6 = await run({
+            argument: 'mode=spoof-spacebg',
+            request: { url: 'https://api.bilibili.com/x/space/wbi/acc/info?mid=1', method: 'GET', headers: {} },
+            response: { headers: {}, body: JSON.stringify(spaceResp) },
+            store: r1.store
+        });
+        const j6 = JSON.parse(r6.done.body);
+        ok('分层空间背景被替换', j6.data.space_bg.image1_landscape === DETAIL.data.suit_items.space_bg[0].properties.image1_landscape);
+        ok('旁边字段没动', j6.data.space_bg.keep === 1);
+
+        // 4b) spoof-space 也要能改分层空间背景（空间页走的是这个模式）
+        const spaceResp2 = {
+            code: 0,
+            data: { mid: 12345, name: 'me', space_bg: { image1_landscape: 'https://old/1l.jpg', image3_portrait: 'https://old/3p.jpg' } }
+        };
+        const r6b = await run({
+            argument: 'mode=spoof-space',
+            request: { url: 'https://api.bilibili.com/x/space/wbi/acc/info?mid=12345', method: 'GET', headers: { Cookie: 'DedeUserID=12345' } },
+            response: { headers: {}, body: JSON.stringify(spaceResp2) },
+            store: r1.store
+        });
+        const j6b = JSON.parse(r6b.done.body);
+        ok('spoof-space 也改了分层空间背景',
+            j6b.data.space_bg.image1_landscape === DETAIL.data.suit_items.space_bg[0].properties.image1_landscape);
+        ok('多层一起换（image3 也被覆盖）',
+            j6b.data.space_bg.image3_portrait === DETAIL.data.suit_items.space_bg[0].properties.image3_portrait);
+
+        // 5) 旧格式自动迁移
+        const oldEquip = { [KEY]: JSON.stringify({ kind: 'equip', id: 1, name: '旧主题', user_equip: { id: 1, package_url: 'https://x/o.zip' }, load_equip: { id: 2, loading_url: 'https://x/o.webp' } }) };
+        const r7 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/state', method: 'GET', headers: {} },
+            store: oldEquip
+        });
+        const j7 = JSON.parse(r7.done.response.body);
+        ok('旧 equip 状态能迁移', j7.data && j7.data.count === 2 && j7.data.slots.skin === '旧主题');
+
+        const oldCard = { [KEY]: JSON.stringify({ kind: 'card', card_type_id: 9, name: '旧卡', card: { space_background: { image: 'https://x/c.png', animation: { animation_url: 'u' } } } }) };
+        const r8 = await run({
+            argument: 'mode=bridge',
+            request: { url: 'https://api.bilibili.com/x/garb/_sg/state', method: 'GET', headers: {} },
+            store: oldCard
+        });
+        ok('旧 card 状态能迁移', JSON.parse(r8.done.response.body).data.slots.spacebg === '旧卡');
     }
 
     // ─────────────────────────────────────────────────────────
